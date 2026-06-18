@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   --page: #f4f1ea;
   --surface: #fffdf8;
   --surface-strong: #f8f5ee;
@@ -25,7 +25,7 @@ body {
   min-height: 100%;
   background: var(--page);
   color: var(--ink);
-  font-family: Inter, "Segoe UI", Arial, sans-serif;
+  font-family: Aptos, "Segoe UI", sans-serif;
 }
 
 button,
@@ -212,10 +212,21 @@ textarea {
 .secondary-action,
 .ghost-action {
   min-height: 46px;
+  border-radius: 6px;
   border: 1px solid transparent;
   cursor: pointer;
+  font-weight: 700;
+  line-height: 1.2;
   transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease,
     transform 0.2s ease;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid rgba(47, 107, 87, 0.28);
+  outline-offset: 2px;
 }
 
 .mode-chip {
@@ -289,6 +300,11 @@ textarea {
 
 .status-dot.is-ready {
   background: var(--accent);
+}
+
+.status-dot.is-active {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(47, 107, 87, 0.14);
 }
 
 .status-dot.is-warning {
@@ -466,7 +482,7 @@ textarea {
 }
 
 .manual-edit-toolbar {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .manual-edit-actions {
@@ -479,6 +495,49 @@ textarea {
   color: var(--accent-strong);
 }
 
+.drawing-tool-button {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  justify-items: start;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.drawing-tool-button::before {
+  content: "";
+  display: block;
+  width: 28px;
+  height: 0;
+  border-top: 5px solid var(--accent);
+  border-radius: 999px;
+}
+
+.drawing-tool-button[data-drawing-tool="walking-path"]::before {
+  border-color: #248b51;
+}
+
+.drawing-tool-button[data-drawing-tool="cycling-path"]::before {
+  border-color: #2670d9;
+}
+
+.drawing-tool-button[data-drawing-tool="shared-path"]::before {
+  border-color: #108c8c;
+  border-top-style: dashed;
+}
+
+.drawing-tool-button[data-drawing-tool="bridge-crossing"]::before {
+  border-color: #6d45b8;
+  border-top-style: dashed;
+}
+
+.drawing-tool-button[data-drawing-tool="barrier-line"]::before,
+.drawing-tool-button[data-drawing-tool="exclusion-area"]::before {
+  border-color: #c43c3c;
+  border-top-style: dashed;
+}
+
 .manual-point-bar {
   grid-template-columns: 2fr 1fr 1fr;
   margin-bottom: 16px;
@@ -486,7 +545,15 @@ textarea {
 
 .table-wrap {
   overflow-x: auto;
+  max-height: 520px;
   border: 1px solid var(--line);
+  background: #fff;
+  scrollbar-gutter: stable;
+}
+
+.table-wrap:focus-visible {
+  outline: 3px solid rgba(47, 107, 87, 0.22);
+  outline-offset: 3px;
 }
 
 .amenities-table {
@@ -504,10 +571,29 @@ textarea {
 }
 
 .amenities-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   background: var(--surface-strong);
   font-size: 0.85rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+
+.amenities-table td input,
+.amenities-table td select {
+  min-height: 38px;
+  padding: 8px 10px;
+}
+
+.amenities-table tbody tr:hover:not(.empty-table-row) {
+  background: rgba(47, 107, 87, 0.055);
+}
+
+.empty-table-row td {
+  padding: 18px 16px;
+  color: var(--muted);
+  font-style: italic;
 }
 
 .amenities-table td input[type="checkbox"] {
@@ -525,10 +611,18 @@ textarea {
 .row-delete {
   min-width: 38px;
   min-height: 38px;
+  border-radius: 6px;
   background: var(--signal-soft);
   border: 1px solid #d1b2a7;
   color: #7d3f2a;
   cursor: pointer;
+  font-weight: 800;
+}
+
+.row-delete:hover,
+.row-delete:focus-visible {
+  background: #e7cfc5;
+  color: #5f2e1e;
 }
 
 .outputs-grid {
@@ -538,6 +632,8 @@ textarea {
 .export-list {
   display: grid;
   gap: 12px;
+  align-content: start;
+  grid-auto-rows: min-content;
 }
 
 .method-note {
@@ -621,14 +717,13 @@ textarea {
 }
 
 
-body.is-busy,
-body.is-busy * {
-  cursor: progress !important;
+body.is-busy {
+  cursor: progress;
 }
 
 button:disabled {
   opacity: 0.65;
-  cursor: progress;
+  cursor: not-allowed;
 }
 
 .status-dot.is-running {
@@ -643,4 +738,3 @@ button:disabled {
     transform: rotate(360deg);
   }
 }
-
