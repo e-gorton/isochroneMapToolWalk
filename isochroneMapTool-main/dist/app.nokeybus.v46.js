@@ -1,4 +1,4 @@
-﻿const CATEGORY_OPTIONS = [
+const CATEGORY_OPTIONS = [
   "Bus stop",
   "Rail station",
   "School",
@@ -193,9 +193,9 @@ const BODS_MAX_CONNECTIONS = 120000;
 const BODS_MAX_STOPS = 20000;
 const BODS_TRANSFER_RADIUS_METRES = 800;
 const BODS_TRANSFER_STOP_CAP = 10;
-const BODS_MAX_TRANSFERS = 1;
+const BODS_MAX_TRANSFERS = 2;
 const BODS_DOWNLOAD_TIMEOUT_MS = 120000;
-const BODS_LOOKAHEAD_MINUTES = 180;
+const BODS_LOOKAHEAD_MINUTES = 240;
 const BODS_ROUTE_CORRIDOR_BUFFER_METRES = 350;
 const BODS_STOP_ENRICHMENT_RADIUS_METRES = 12000;
 const BODS_STOP_ENRICHMENT_MAX_IDS = 160;
@@ -306,6 +306,7 @@ const BUS_CARTO_RADIAL_BINS = 96;
 const BUS_CARTO_HULL_POINT_SEGMENTS = 10;
 const BUS_CARTO_SMOOTHING_ITERATIONS = 2;
 const ACTIVE_TRAVEL_NETWORK_CACHE = new Map();
+const ACTIVE_TRAVEL_GRAPH_CACHE = new Map();
 const ACTIVE_TRAVEL_NETWORK_FETCH_RADIUS_MARGIN_METRES = 1200;
 const ACTIVE_TRAVEL_BUFFER_BY_MODE = {
   walking: 55,
@@ -313,7 +314,11 @@ const ACTIVE_TRAVEL_BUFFER_BY_MODE = {
 };
 const ACTIVE_TRAVEL_SAMPLE_SPACING_BY_MODE = {
   walking: 45,
-  cycling: 140,
+  cycling: 90,
+};
+const ACTIVE_TRAVEL_MANUAL_PATH_SAMPLE_SPACING_BY_MODE = {
+  walking: 24,
+  cycling: 36,
 };
 const ACTIVE_TRAVEL_CLUSTER_LINK_BY_MODE = {
   walking: 220,
@@ -321,11 +326,21 @@ const ACTIVE_TRAVEL_CLUSTER_LINK_BY_MODE = {
 };
 const ACTIVE_TRAVEL_MIN_COMPONENT_AREA_BY_MODE = {
   walking: 1800,
-  cycling: 9000,
+  cycling: 1200,
 };
-const ACTIVE_TRAVEL_INTERSECTION_TOLERANCE_METRES = 18;
-const ACTIVE_TRAVEL_SNAP_TOLERANCE_METRES = 40;
-const ACTIVE_TRAVEL_MAX_SNAP_CANDIDATE_DISTANCE_METRES = 70;
+const ACTIVE_TRAVEL_RADIAL_BINS_BY_MODE = {
+  walking: 128,
+  cycling: 192,
+};
+const ACTIVE_TRAVEL_SMOOTHING_ITERATIONS_BY_MODE = {
+  walking: 1,
+  cycling: 1,
+};
+const ACTIVE_TRAVEL_INTERSECTION_TOLERANCE_METRES = 22;
+const ACTIVE_TRAVEL_SNAP_TOLERANCE_METRES = 55;
+const ACTIVE_TRAVEL_MAX_SNAP_CANDIDATE_DISTANCE_METRES = 90;
+const ACTIVE_TRAVEL_OSM_JUNCTION_STITCH_TOLERANCE_METRES = 14;
+const ACTIVE_TRAVEL_OSM_ENDPOINT_LINK_TOLERANCE_METRES = 10;
 const ACTIVE_TRAVEL_DEFAULT_WALKING_SPEED_KPH = 4.8;
 const ACTIVE_TRAVEL_WALK_PERMISSIVE_HIGHWAYS = new Set([
   "residential",
@@ -450,6 +465,11 @@ const state = {
   amenities: [],
   isochrones: [],
   currentMapView: null,
+  mapViewAnimationFrameId: null,
+  mapViewAnimationStartTime: 0,
+  mapViewAnimationDurationMs: 0,
+  mapViewAnimationFrom: null,
+  mapViewAnimationTo: null,
   lastZoomControlValue: 0,
   nextAmenityId: 1,
   nextManualOverlayId: 1,
@@ -461,6 +481,7 @@ const state = {
   isDraggingMap: false,
   mapDragPointerId: null,
   mapDragLastPoint: null,
+  mapPanFrameId: null,
   generatedScenario: null,
   lastAutoPlanningAuthority: "",
   planningAuthorityLookupTimer: null,
@@ -528,6 +549,7 @@ const elements = {
   previewNote: document.getElementById("previewNote"),
   mapPreview: document.getElementById("mapPreview"),
   amenitiesTableBody: document.getElementById("amenitiesTableBody"),
+  manualOverlaysTableBody: document.getElementById("manualOverlaysTableBody"),
   methodNote: document.getElementById("methodNote"),
   manualPointName: document.getElementById("manualPointName"),
   manualPointCategory: document.getElementById("manualPointCategory"),
@@ -570,18 +592,18 @@ function init() {
 
 function initialiseBusMethodControl() {
   if (elements.busMethod && !elements.busMethod.value) {
-    elements.busMethod.value = BUS_METHOD_OSM;
+    elements.busMethod.value = BUS_METHOD_BODS;
   }
   updateBusMethodControls();
 }
 
 function getSelectedBusMethod() {
-  const value = elements.busMethod?.value || BUS_METHOD_OSM;
-  return value === BUS_METHOD_BODS ? BUS_METHOD_BODS : BUS_METHOD_OSM;
+  const value = elements.busMethod?.value || BUS_METHOD_BODS;
+  return value === BUS_METHOD_OSM ? BUS_METHOD_OSM : BUS_METHOD_BODS;
 }
 
 function getBusMethodLabel(method = getSelectedBusMethod()) {
-  return BUS_METHOD_LABELS[method] || BUS_METHOD_LABELS[BUS_METHOD_OSM];
+  return BUS_METHOD_LABELS[method] || BUS_METHOD_LABELS[BUS_METHOD_BODS];
 }
 
 function initialiseBusDateTimeControls() {
@@ -891,6 +913,7 @@ function bindEvents() {
   elements.mapPreview.addEventListener("pointerup", onMapPointerUp);
   elements.mapPreview.addEventListener("pointerleave", onMapPointerUp);
   elements.mapPreview.addEventListener("pointercancel", onMapPointerUp);
+  document.addEventListener("keydown", onDocumentKeyDown);
 }
 
 function render() {
@@ -898,6 +921,7 @@ function render() {
   updateManualEditControls();
   updateStatus();
   renderAmenitiesTable();
+  renderManualOverlaysTable();
   renderMap();
   renderMethodNote();
 }
@@ -923,6 +947,9 @@ function updateStatus() {
   if (elements.generateButton) {
     elements.generateButton.disabled = isRunning;
   }
+  if (elements.mapPreview) {
+    elements.mapPreview.setAttribute("aria-busy", String(isRunning));
+  }
   elements.statusTitle.textContent = state.status.title;
   elements.statusText.textContent = state.status.text;
   elements.statusDot.className = "status-dot";
@@ -932,6 +959,8 @@ function updateStatus() {
     elements.statusDot.classList.add("is-warning");
   } else if (state.status.tone === "error") {
     elements.statusDot.classList.add("is-error");
+  } else if (state.status.tone === "active") {
+    elements.statusDot.classList.add("is-active");
   } else if (state.status.tone === "ready") {
     elements.statusDot.classList.add("is-ready");
   }
@@ -939,6 +968,14 @@ function updateStatus() {
 
 function renderAmenitiesTable() {
   elements.amenitiesTableBody.innerHTML = "";
+
+  if (state.amenities.length === 0) {
+    const row = document.createElement("tr");
+    row.className = "empty-table-row";
+    row.innerHTML = `<td colspan="7">No amenities are currently shown. Generate a draft map or place a manual point to populate this table.</td>`;
+    elements.amenitiesTableBody.appendChild(row);
+    return;
+  }
 
   state.amenities.forEach((item) => {
     const row = document.createElement("tr");
@@ -968,6 +1005,144 @@ function renderAmenitiesTable() {
       render();
     });
   });
+}
+
+function renderManualOverlaysTable() {
+  if (!elements.manualOverlaysTableBody) {
+    return;
+  }
+
+  elements.manualOverlaysTableBody.innerHTML = "";
+  const savedManualOverlays = getAllSavedManualOverlays();
+
+  if (savedManualOverlays.length === 0) {
+    const row = document.createElement("tr");
+    row.className = "empty-table-row";
+    row.innerHTML = `<td colspan="4">No manual map edits are currently saved.</td>`;
+    elements.manualOverlaysTableBody.appendChild(row);
+    return;
+  }
+
+  savedManualOverlays.forEach((item) => {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+        <td><input type="text" value="${escapeHtml(item.displayName)}" data-manual-field="displayName" data-manual-id="${item.id}" data-manual-type="${item.type}" /></td>
+        <td>${escapeHtml(getDrawingToolConfig(item.type)?.displayName || item.type)}</td>
+        <td><input type="checkbox" ${item.showInLegend ? "checked" : ""} data-manual-field="showInLegend" data-manual-id="${item.id}" data-manual-type="${item.type}" /></td>
+        <td><button class="row-delete" type="button" data-manual-delete-id="${item.id}" data-manual-delete-type="${item.type}" aria-label="Delete manual edit">X</button></td>
+      `;
+    elements.manualOverlaysTableBody.appendChild(row);
+  });
+
+  elements.manualOverlaysTableBody
+    .querySelectorAll("input[data-manual-id]")
+    .forEach((control) => {
+      control.addEventListener("input", onManualOverlayFieldChange);
+      control.addEventListener("change", onManualOverlayFieldChange);
+    });
+
+  elements.manualOverlaysTableBody
+    .querySelectorAll("[data-manual-delete-id]")
+    .forEach((button) => {
+      button.addEventListener("click", async () => {
+        const manualId = Number(button.dataset.manualDeleteId);
+        const manualType = String(button.dataset.manualDeleteType || "");
+        const removedOverlay = findSavedManualOverlay(manualId, manualType);
+        if (!removedOverlay) {
+          return;
+        }
+        removeSavedManualOverlay(manualId, manualType);
+        persistManualMapEdits();
+        await refreshCurrentIsochronesAfterManualOverlayChange(
+          `Recalculating ${MODE_CONFIG[state.selectedMode].label.toLowerCase()} catchment after removing ${removedOverlay.displayName}.`,
+          "Manual edit removed",
+          `${removedOverlay.displayName} was removed from the map.`,
+          "ready",
+          [removedOverlay]
+        );
+      });
+    });
+}
+
+function onManualOverlayFieldChange(event) {
+  const manualId = Number(event.target.dataset.manualId);
+  const manualType = String(event.target.dataset.manualType || "");
+  const field = event.target.dataset.manualField;
+  const overlay = findSavedManualOverlay(manualId, manualType);
+  if (!overlay || !field) {
+    return;
+  }
+
+  if (event.target.type === "checkbox") {
+    overlay[field] = event.target.checked;
+  } else {
+    overlay[field] = event.target.value;
+  }
+
+  persistManualMapEdits();
+
+  if (event.target.type === "text") {
+    renderMap();
+    renderMethodNote();
+    return;
+  }
+
+  render();
+}
+
+function doesManualOverlayAffectMode(overlay, mode = state.selectedMode) {
+  if (!overlay || mode === "bus") {
+    return false;
+  }
+  if (overlay.type === "shared-path" || overlay.type === "bridge-crossing" || overlay.type === "barrier-line") {
+    return true;
+  }
+  if (mode === "walking") {
+    return overlay.type === "walking-path";
+  }
+  if (mode === "cycling") {
+    return overlay.type === "cycling-path";
+  }
+  return false;
+}
+
+function shouldRefreshCurrentIsochroneForManualOverlays(overlays) {
+  return Boolean(
+    state.generatedScenario &&
+    state.hasGeneratedDraft &&
+    state.selectedMode !== "bus" &&
+    Array.isArray(overlays) &&
+    overlays.some((overlay) => doesManualOverlayAffectMode(overlay, state.selectedMode))
+  );
+}
+
+async function refreshCurrentIsochronesAfterManualOverlayChange(
+  statusText,
+  fallbackTitle,
+  fallbackText,
+  fallbackTone,
+  overlays = []
+) {
+  if (shouldRefreshCurrentIsochroneForManualOverlays(overlays)) {
+    await refreshLiveContext(statusText);
+    return;
+  }
+  setStatus(fallbackTitle, fallbackText, fallbackTone);
+  render();
+}
+
+function findSavedManualOverlay(manualId, manualType) {
+  return manualType === "exclusion-area"
+    ? state.isochroneExclusionAreas.find((item) => item.id === manualId)
+    : state.manualLineEdits.find((item) => item.id === manualId && item.type === manualType);
+}
+
+function removeSavedManualOverlay(manualId, manualType) {
+  if (manualType === "exclusion-area") {
+    state.isochroneExclusionAreas = state.isochroneExclusionAreas.filter((item) => item.id !== manualId);
+    return;
+  }
+  state.manualLineEdits = state.manualLineEdits.filter((item) => !(item.id === manualId && item.type === manualType));
 }
 
 function onAmenityFieldChange(event) {
@@ -1043,7 +1218,11 @@ function renderMap() {
 
   const isochroneMarkup = buildIsochroneLayerMarkup(state.isochrones, mapView);
   const exclusionMaskMarkup = buildIsochroneExclusionMaskMarkup(state.isochroneExclusionAreas, mapView);
-  const exclusionOutlineMarkup = buildIsochroneExclusionOutlineMarkup(state.isochroneExclusionAreas, mapView);
+  const exclusionBoundaryMarkup = buildIsochroneExclusionBoundaryMarkup(
+    isochroneMarkup.layers,
+    state.isochroneExclusionAreas,
+    mapView
+  );
   const manualLineMarkup = buildManualLineOverlayMarkup(state.manualLineEdits, mapView);
   const draftMarkup = buildDraftDrawingMarkup(mapView);
   const pointMarkup = buildAmenityDisplayItems(visibleAmenities, mapView, site, state.selectedMode)
@@ -1097,12 +1276,14 @@ function renderMap() {
     ${basemapMarkup}
     ${exclusionMaskMarkup}
     <g opacity="0.82">
-      <g${exclusionMaskMarkup ? ' mask="url(#isochrone-fill-mask)"' : ""}>${isochroneMarkup.fillMarkup}</g>
-      ${isochroneMarkup.strokeMarkup}
+      <g${exclusionMaskMarkup ? ' mask="url(#isochrone-fill-mask)"' : ""}>
+        ${isochroneMarkup.fillMarkup}
+        ${isochroneMarkup.strokeMarkup}
+      </g>
+      ${exclusionBoundaryMarkup}
     </g>
     ${manualLineMarkup}
     ${draftMarkup}
-    ${exclusionOutlineMarkup}
     ${pointMarkup}
     ${siteMarker}
     ${accessMarker}
@@ -1121,6 +1302,107 @@ function renderMap() {
   `;
   elements.mapPreview.style.cursor =
     state.isPlacingPoint || state.activeDrawingTool ? "crosshair" : state.isDraggingMap ? "grabbing" : "grab";
+}
+
+function buildDraftScenarioFromInputs() {
+  const siteCoordinates = parseCoordinatePair(elements.siteCoordinates.value);
+  if (!siteCoordinates) {
+    return null;
+  }
+
+  const accessCoordinates = parseCoordinatePair(elements.accessCoordinates.value, true);
+  if (elements.accessCoordinates.value.trim() !== "" && !accessCoordinates) {
+    return null;
+  }
+
+  return buildGeneratedScenario(siteCoordinates, accessCoordinates);
+}
+
+function pruneAutoAmenities() {
+  state.amenities = state.amenities.filter((item) => item.isManual);
+}
+
+function clearGeneratedOutputsForScenarioChange() {
+  state.isochrones = [];
+  state.hasGeneratedDraft = false;
+  state.lastIsochroneFallbackNotice = "";
+  state.lastIsochroneSourceNote = "";
+  pruneAutoAmenities();
+}
+
+function getActiveScenarioForPreview() {
+  return state.generatedScenario ?? buildDraftScenarioFromInputs() ?? buildGeneratedScenario(
+    parseCoordinatePair(DEFAULT_SITE_COORDINATES),
+    parseCoordinatePair(DEFAULT_ACCESS_COORDINATES, true)
+  );
+}
+
+function getDefaultPreviewMapView(scenario = getActiveScenarioForPreview()) {
+  return buildBestFitMapView(
+    scenario,
+    state.hasGeneratedDraft ? state.isochrones : [],
+    MODE_CONFIG[state.selectedMode].zoom,
+    Number(elements.mapZoomAdjust.value)
+  );
+}
+
+function cancelMapViewAnimation() {
+  if (state.mapViewAnimationFrameId != null) {
+    cancelAnimationFrame(state.mapViewAnimationFrameId);
+  }
+  state.mapViewAnimationFrameId = null;
+  state.mapViewAnimationStartTime = 0;
+  state.mapViewAnimationDurationMs = 0;
+  state.mapViewAnimationFrom = null;
+  state.mapViewAnimationTo = null;
+}
+
+function interpolateMapView(fromView, toView, progress) {
+  return {
+    zoom: fromView.zoom + (toView.zoom - fromView.zoom) * progress,
+    topLeft: {
+      x: fromView.topLeft.x + (toView.topLeft.x - fromView.topLeft.x) * progress,
+      y: fromView.topLeft.y + (toView.topLeft.y - fromView.topLeft.y) * progress,
+    },
+  };
+}
+
+function animateMapViewTo(targetView, durationMs = 350) {
+  if (!targetView) {
+    return;
+  }
+
+  cancelMapViewAnimation();
+  const fromView = state.currentMapView ?? getDefaultPreviewMapView();
+  const toView = { zoom: targetView.zoom, topLeft: { ...targetView.topLeft } };
+  state.currentMapView = fromView;
+  state.mapViewAnimationFrom = fromView;
+  state.mapViewAnimationTo = toView;
+  state.mapViewAnimationDurationMs = durationMs;
+  state.mapViewAnimationStartTime = performance.now();
+
+  const step = (timestamp) => {
+    const elapsed = timestamp - state.mapViewAnimationStartTime;
+    const rawProgress = Math.min(1, elapsed / state.mapViewAnimationDurationMs);
+    const easedProgress = 1 - (1 - rawProgress) * (1 - rawProgress) * (1 - rawProgress);
+    state.currentMapView = interpolateMapView(
+      state.mapViewAnimationFrom,
+      state.mapViewAnimationTo,
+      easedProgress
+    );
+    renderMap();
+
+    if (rawProgress >= 1) {
+      state.currentMapView = state.mapViewAnimationTo;
+      cancelMapViewAnimation();
+      renderMap();
+      return;
+    }
+
+    state.mapViewAnimationFrameId = requestAnimationFrame(step);
+  };
+
+  state.mapViewAnimationFrameId = requestAnimationFrame(step);
 }
 
 function renderMethodNote() {
@@ -1172,11 +1454,13 @@ function renderMethodNote() {
           line_type: getDrawingToolConfig(item.type)?.displayName || item.type,
           display_name: item.displayName,
           point_count: item.points.length,
+          shown_in_legend: item.showInLegend !== false,
           mode_created_in: item.modeCreated || undefined,
         })),
         isochrone_exclusion_areas: state.isochroneExclusionAreas.map((item) => ({
           exclusion_area_name: item.displayName,
           point_count: item.points.length,
+          shown_in_legend: item.showInLegend !== false,
           mode_created_in: item.modeCreated || undefined,
         })),
       },
@@ -1276,6 +1560,7 @@ async function resetOverrides() {
 
 function updateManualPointButtonState() {
   elements.togglePlacePointButton.classList.toggle("toggle-live", state.isPlacingPoint);
+  elements.togglePlacePointButton.setAttribute("aria-pressed", String(state.isPlacingPoint));
   elements.togglePlacePointButton.textContent = state.isPlacingPoint
     ? "Click map to place point"
     : "Place manual point";
@@ -1283,7 +1568,9 @@ function updateManualPointButtonState() {
 
 function updateManualEditControls() {
   elements.drawingToolButtons.forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.drawingTool === state.activeDrawingTool);
+    const isActiveTool = button.dataset.drawingTool === state.activeDrawingTool;
+    button.classList.toggle("is-active", isActiveTool);
+    button.setAttribute("aria-pressed", String(isActiveTool));
   });
 
   if (elements.manualEditStatus) {
@@ -1301,7 +1588,7 @@ function updateManualEditControls() {
     elements.finishDrawingButton.disabled = !state.activeDrawingTool;
   }
   if (elements.cancelDrawingButton) {
-    elements.cancelDrawingButton.disabled = !state.activeDrawingTool || state.draftDrawingPoints.length === 0;
+    elements.cancelDrawingButton.disabled = !state.activeDrawingTool && state.draftDrawingPoints.length === 0;
   }
   if (elements.clearLastManualEditButton) {
     elements.clearLastManualEditButton.disabled =
@@ -1311,7 +1598,8 @@ function updateManualEditControls() {
     elements.clearAllManualEditsButton.disabled =
       state.manualLineEdits.length === 0 &&
       state.isochroneExclusionAreas.length === 0 &&
-      state.draftDrawingPoints.length === 0;
+      state.draftDrawingPoints.length === 0 &&
+      !state.activeDrawingTool;
   }
 
   updateManualPointButtonState();
@@ -1366,7 +1654,7 @@ function activateDrawingTool(toolKey) {
     draftHadPoints
       ? `The previous draft was cleared. Click within the map preview to draw ${toolConfig.displayName.toLowerCase()}.`
       : `Click within the map preview to draw ${toolConfig.displayName.toLowerCase()}.`,
-    "running"
+    "active"
   );
   render();
 }
@@ -1379,16 +1667,35 @@ function togglePlacePointMode() {
       setStatus(
         "Placement mode active",
         "Manual line drawing was cleared so a manual point can be placed. Click within the map preview to add a manual point.",
-        "running"
+        "active"
       );
     } else {
-      setStatus("Placement mode active", "Click within the map preview to add a manual point.", "running");
+      setStatus("Placement mode active", "Click within the map preview to add a manual point.", "active");
     }
   } else {
     setStatus("Placement mode closed", "Manual point placement has been cancelled.", "ready");
   }
   state.isPlacingPoint = nextState;
   render();
+}
+
+function onDocumentKeyDown(event) {
+  if (event.key !== "Escape" || event.defaultPrevented) {
+    return;
+  }
+
+  if (state.activeDrawingTool || state.draftDrawingPoints.length > 0) {
+    event.preventDefault();
+    cancelCurrentDrawing();
+    return;
+  }
+
+  if (state.isPlacingPoint) {
+    event.preventDefault();
+    state.isPlacingPoint = false;
+    setStatus("Placement mode closed", "Manual point placement has been cancelled.", "ready");
+    render();
+  }
 }
 
 function getMapClickCoordinate(event) {
@@ -1409,7 +1716,7 @@ function getMapClickCoordinate(event) {
   return unprojectSvgToLatLon(clickX, clickY, mapView);
 }
 
-function finishCurrentDrawing() {
+async function finishCurrentDrawing() {
   if (!state.activeDrawingTool) {
     setStatus("Select a drawing tool", "Choose a manual drawing tool before finishing a draft.", "warning");
     render();
@@ -1437,6 +1744,7 @@ function finishCurrentDrawing() {
     type: state.activeDrawingTool,
     displayName: customName || getManualOverlayDefaultName(state.activeDrawingTool, getNextManualOverlayOrdinal(state.activeDrawingTool)),
     points: state.draftDrawingPoints.map((point) => ({ latitude: point.latitude, longitude: point.longitude })),
+    showInLegend: true,
     modeCreated: state.selectedMode,
   };
 
@@ -1451,12 +1759,13 @@ function finishCurrentDrawing() {
   if (elements.manualOverlayName) {
     elements.manualOverlayName.value = "";
   }
-  setStatus(
+  await refreshCurrentIsochronesAfterManualOverlayChange(
+    `Recalculating ${MODE_CONFIG[state.selectedMode].label.toLowerCase()} catchment after saving ${overlay.displayName}.`,
     toolConfig.geometryType === "polygon" ? "Isochrone exclusion saved" : "Manual line saved",
     `${overlay.displayName} has been added to the map preview and will be included in SVG and PNG exports.`,
-    "ready"
+    "ready",
+    [overlay]
   );
-  render();
 }
 
 function cancelCurrentDrawing() {
@@ -1466,12 +1775,12 @@ function cancelCurrentDrawing() {
     return;
   }
 
-  clearDraftDrawing();
-  setStatus("Draft drawing cleared", "The current draft drawing has been cancelled. Saved manual edits were left in place.", "ready");
+  deactivateDrawingTool(true);
+  setStatus("Drawing cancelled", "The current manual drawing tool has been closed. Saved manual edits were left in place.", "ready");
   render();
 }
 
-function clearLastManualEdit() {
+async function clearLastManualEdit() {
   const latestOverlay = getAllSavedManualOverlays().slice(-1)[0];
   if (!latestOverlay) {
     setStatus("No manual edits saved", "There is no saved manual edit to remove.", "warning");
@@ -1486,25 +1795,32 @@ function clearLastManualEdit() {
   }
 
   persistManualMapEdits();
-  setStatus("Last manual edit cleared", `${latestOverlay.displayName} was removed from the map.`, "ready");
-  render();
+  await refreshCurrentIsochronesAfterManualOverlayChange(
+    `Recalculating ${MODE_CONFIG[state.selectedMode].label.toLowerCase()} catchment after removing ${latestOverlay.displayName}.`,
+    "Last manual edit cleared",
+    `${latestOverlay.displayName} was removed from the map.`,
+    "ready",
+    [latestOverlay]
+  );
 }
 
-function clearAllManualEdits() {
+async function clearAllManualEdits() {
   const hadSavedEdits = state.manualLineEdits.length > 0 || state.isochroneExclusionAreas.length > 0;
-  const hadDraft = state.draftDrawingPoints.length > 0;
+  const hadDraft = state.draftDrawingPoints.length > 0 || Boolean(state.activeDrawingTool);
+  const clearedOverlays = getAllSavedManualOverlays();
   state.manualLineEdits = [];
   state.isochroneExclusionAreas = [];
-  clearDraftDrawing();
+  deactivateDrawingTool(true);
   persistManualMapEdits();
-  setStatus(
+  await refreshCurrentIsochronesAfterManualOverlayChange(
+    `Recalculating ${MODE_CONFIG[state.selectedMode].label.toLowerCase()} catchment after clearing manual overlays.`,
     "Manual edits cleared",
     hadSavedEdits || hadDraft
       ? "All saved manual overlays and draft drawing points were cleared from this device."
       : "There were no manual edits to clear.",
-    hadSavedEdits || hadDraft ? "ready" : "warning"
+    hadSavedEdits || hadDraft ? "ready" : "warning",
+    clearedOverlays
   );
-  render();
 }
 
 function getAllSavedManualOverlays() {
@@ -1586,6 +1902,7 @@ function normaliseSavedManualOverlay(item) {
     type,
     displayName: String(item.displayName || getManualOverlayDefaultName(type)),
     points,
+    showInLegend: item.showInLegend !== false,
     modeCreated: item.modeCreated ? String(item.modeCreated) : "",
   };
 }
@@ -2500,9 +2817,24 @@ function handleCoordinateDraftChange() {
     return;
   }
 
+  const previousScenario = state.generatedScenario ?? buildGeneratedScenario(
+    parseCoordinatePair(DEFAULT_SITE_COORDINATES),
+    parseCoordinatePair(DEFAULT_ACCESS_COORDINATES, true)
+  );
+  const baseView = state.currentMapView ?? buildBestFitMapView(
+    previousScenario,
+    state.hasGeneratedDraft ? state.isochrones : [],
+    MODE_CONFIG[state.selectedMode].zoom,
+    Number(elements.mapZoomAdjust.value)
+  );
+  const nextScenario = buildGeneratedScenario(siteCoordinates, accessCoordinates);
+  state.generatedScenario = nextScenario;
+  clearGeneratedOutputsForScenarioChange();
+  state.currentMapView = baseView;
+  animateMapViewTo(getDefaultPreviewMapView(nextScenario), 360);
   setStatus(
     "Coordinates updated",
-    "Select Generate draft map to recalculate the preview from the new coordinates.",
+    "Preview markers have moved to the new coordinates. Generate the draft map when you are ready to recalculate isochrones.",
     "warning"
   );
   schedulePlanningAuthorityLookup(siteCoordinates);
@@ -2572,11 +2904,11 @@ function onMapZoomAdjustChange() {
 }
 
 function recenterMapView() {
-  state.currentMapView = null;
+  cancelMapViewAnimation();
   elements.mapZoomAdjust.value = "0";
   state.lastZoomControlValue = 0;
   elements.mapZoomAdjustValue.textContent = formatMapZoomAdjustValue();
-  renderMap();
+  animateMapViewTo(getDefaultPreviewMapView(), 350);
 }
 
 function onMapPointerDown(event) {
@@ -2585,6 +2917,7 @@ function onMapPointerDown(event) {
   }
 
   event.preventDefault();
+  cancelMapViewAnimation();
   state.isDraggingMap = true;
   state.mapDragPointerId = event.pointerId;
   state.mapDragLastPoint = { x: event.clientX, y: event.clientY };
@@ -2609,7 +2942,13 @@ function onMapPointerMove(event) {
       y: state.currentMapView.topLeft.y - deltaY,
     },
   };
-  renderMap();
+  if (state.mapPanFrameId != null) {
+    return;
+  }
+  state.mapPanFrameId = requestAnimationFrame(() => {
+    state.mapPanFrameId = null;
+    renderMap();
+  });
 }
 
 function onMapPointerUp(event) {
@@ -2620,6 +2959,11 @@ function onMapPointerUp(event) {
   state.isDraggingMap = false;
   state.mapDragPointerId = null;
   state.mapDragLastPoint = null;
+  if (state.mapPanFrameId != null) {
+    cancelAnimationFrame(state.mapPanFrameId);
+    state.mapPanFrameId = null;
+    renderMap();
+  }
   elements.mapPreview.releasePointerCapture?.(event.pointerId);
   elements.mapPreview.style.cursor =
     state.isPlacingPoint || state.activeDrawingTool ? "crosshair" : "grab";
@@ -3427,7 +3771,11 @@ async function fetchLocalActiveTravelIsochronesForScenario(originCoordinates, mo
     setMapCacheEntry(ACTIVE_TRAVEL_NETWORK_CACHE, cacheKey, payload, clonePlainValue);
   }
 
-  const graph = buildActiveTravelGraphFromOverpassPayload(payload, mode);
+  let graph = getMapCacheEntry(ACTIVE_TRAVEL_GRAPH_CACHE, cacheKey, cloneActiveTravelGraph);
+  if (!graph) {
+    graph = buildActiveTravelGraphFromOverpassPayload(payload, mode);
+    setMapCacheEntry(ACTIVE_TRAVEL_GRAPH_CACHE, cacheKey, graph, cloneActiveTravelGraph);
+  }
   applyManualActiveTravelEditsToGraph(graph, mode);
   if (graph.edges.filter((edge) => edge.active !== false).length === 0 || graph.nodes.size === 0) {
     throw createServiceError(
@@ -3612,6 +3960,7 @@ function buildActiveTravelGraphFromOverpassPayload(payload, mode) {
     }
   });
 
+  strengthenOsmGraphConnectivity(graph);
   return graph;
 }
 
@@ -3623,6 +3972,26 @@ function createEmptyActiveTravelGraph(mode) {
     edges: [],
     nextSyntheticNodeId: 1,
   };
+}
+
+function cloneActiveTravelGraph(graph) {
+  if (!graph) {
+    return graph;
+  }
+  return {
+    mode: graph.mode,
+    nextSyntheticNodeId: Number(graph.nextSyntheticNodeId) || 1,
+    nodes: new Map(Array.from(graph.nodes.entries(), ([nodeId, node]) => [nodeId, { ...node }])),
+    adjacency: new Map(
+      Array.from(graph.adjacency.entries(), ([nodeId, links]) => [nodeId, Array.isArray(links) ? links.map((link) => ({ ...link })) : []])
+    ),
+    edges: Array.isArray(graph.edges) ? graph.edges.map((edge) => ({ ...edge })) : [],
+  };
+}
+
+function strengthenOsmGraphConnectivity(graph) {
+  connectLowDegreeNodesToNearbyEdges(graph);
+  bridgeNearbyTerminalNodes(graph);
 }
 
 function addGraphNode(graph, coordinate, id = null) {
@@ -3671,6 +4040,119 @@ function addGraphEdge(graph, fromId, toId, details) {
     graph.adjacency.get(edge.b).push({ to: edge.a, lengthMetres: edge.lengthMetres, edgeId });
   }
   return edge;
+}
+
+function buildActiveGraphDegreeMap(graph) {
+  const degreeByNodeId = new Map();
+  graph.nodes.forEach((_, nodeId) => {
+    degreeByNodeId.set(nodeId, 0);
+  });
+  graph.edges.forEach((edge) => {
+    if (edge.active === false) {
+      return;
+    }
+    degreeByNodeId.set(edge.a, (degreeByNodeId.get(edge.a) || 0) + 1);
+    degreeByNodeId.set(edge.b, (degreeByNodeId.get(edge.b) || 0) + 1);
+  });
+  return degreeByNodeId;
+}
+
+function connectLowDegreeNodesToNearbyEdges(graph) {
+  const degreeByNodeId = buildActiveGraphDegreeMap(graph);
+  const candidateNodeIds = Array.from(graph.nodes.keys()).filter((nodeId) => (degreeByNodeId.get(nodeId) || 0) <= 2);
+
+  candidateNodeIds.forEach((nodeId) => {
+    const node = graph.nodes.get(nodeId);
+    if (!node) {
+      return;
+    }
+    const best = findBestNearbyEdgeForExistingNode(graph, nodeId, node, ACTIVE_TRAVEL_OSM_JUNCTION_STITCH_TOLERANCE_METRES);
+    if (!best) {
+      return;
+    }
+    const splitNodeId = splitGraphEdgeAtCoordinate(graph, best.edge, best.projection.coordinate);
+    if (splitNodeId === nodeId || graphHasActiveEdgeBetween(graph, nodeId, splitNodeId)) {
+      return;
+    }
+    addGraphEdge(graph, nodeId, splitNodeId, {
+      lengthMetres: best.projection.distanceMetres,
+      bidirectional: true,
+      sourceType: "stitch",
+      highway: best.edge.highway,
+      wayName: best.edge.wayName,
+      wayId: best.edge.wayId,
+    });
+  });
+}
+
+function findBestNearbyEdgeForExistingNode(graph, nodeId, node, toleranceMetres) {
+  let best = null;
+  graph.edges.forEach((edge) => {
+    if (edge.active === false || edge.a === nodeId || edge.b === nodeId || edge.sourceType !== "osm") {
+      return;
+    }
+    const fromNode = graph.nodes.get(edge.a);
+    const toNode = graph.nodes.get(edge.b);
+    if (!fromNode || !toNode) {
+      return;
+    }
+    const projection = projectCoordinateOntoSegmentMetres(
+      node,
+      { latitude: fromNode.latitude, longitude: fromNode.longitude },
+      { latitude: toNode.latitude, longitude: toNode.longitude }
+    );
+    if (!projection || projection.distanceMetres > toleranceMetres) {
+      return;
+    }
+    if (projection.fraction <= 0.08 || projection.fraction >= 0.92) {
+      return;
+    }
+    if (!best || projection.distanceMetres < best.projection.distanceMetres) {
+      best = { edge, projection };
+    }
+  });
+  return best;
+}
+
+function bridgeNearbyTerminalNodes(graph) {
+  const degreeByNodeId = buildActiveGraphDegreeMap(graph);
+  const terminalNodes = Array.from(graph.nodes.entries())
+    .filter(([nodeId]) => (degreeByNodeId.get(nodeId) || 0) === 1)
+    .map(([nodeId, node]) => ({ nodeId, node }));
+
+  for (let index = 0; index < terminalNodes.length; index += 1) {
+    for (let candidateIndex = index + 1; candidateIndex < terminalNodes.length; candidateIndex += 1) {
+      const left = terminalNodes[index];
+      const right = terminalNodes[candidateIndex];
+      if (graphHasActiveEdgeBetween(graph, left.nodeId, right.nodeId)) {
+        continue;
+      }
+      const distanceMetres = getDistanceMetres(
+        left.node.latitude,
+        left.node.longitude,
+        right.node.latitude,
+        right.node.longitude
+      );
+      if (distanceMetres <= 0.5 || distanceMetres > ACTIVE_TRAVEL_OSM_ENDPOINT_LINK_TOLERANCE_METRES) {
+        continue;
+      }
+      addGraphEdge(graph, left.nodeId, right.nodeId, {
+        lengthMetres: distanceMetres,
+        bidirectional: true,
+        sourceType: "stitch",
+      });
+    }
+  }
+}
+
+function graphHasActiveEdgeBetween(graph, fromId, toId) {
+  return graph.edges.some((edge) =>
+    edge.active !== false &&
+    (
+      (edge.a === String(fromId) && edge.b === String(toId)) ||
+      (edge.bidirectional && edge.a === String(toId) && edge.b === String(fromId))
+    )
+  );
 }
 
 function isOsmWayWalkable(tags = {}) {
@@ -3787,9 +4269,18 @@ function applyManualActiveTravelEditsToGraph(graph, mode) {
   state.manualLineEdits
     .filter((item) => relevantManualTypes.has(item.type) && Array.isArray(item.points) && item.points.length >= 2)
     .forEach((item) => {
-      const snappedNodeIds = item.points.map((point, index) =>
-        addTemporarySnappedGraphNode(graph, point, `manual-${item.id}-${index}`)
-      );
+      const overlayTemporaryNodeIds = new Set();
+      const snappedNodeIds = buildSampledManualOverlayPoints(item, mode)
+        .map((point, index) => {
+          const preferredId = `manual-${item.id}-${index}`;
+          const nodeId = addTemporarySnappedGraphNode(graph, point, preferredId, {
+            ignoreNodeIds: overlayTemporaryNodeIds,
+            ignoreEdge: (edge) => edge.sourceType === "snap",
+          });
+          overlayTemporaryNodeIds.add(preferredId);
+          return nodeId;
+        })
+        .filter((nodeId, index, allNodeIds) => index === 0 || nodeId !== allNodeIds[index - 1]);
       for (let index = 1; index < snappedNodeIds.length; index += 1) {
         const fromNode = graph.nodes.get(snappedNodeIds[index - 1]);
         const toNode = graph.nodes.get(snappedNodeIds[index]);
@@ -3854,8 +4345,32 @@ function buildManualLineSegments(points) {
   return output;
 }
 
-function addTemporarySnappedGraphNode(graph, coordinate, preferredId = "") {
-  const snap = findNearestGraphSnap(graph, coordinate);
+function buildSampledManualOverlayPoints(overlay, mode) {
+  const points = Array.isArray(overlay?.points) ? overlay.points : [];
+  if (points.length < 2) {
+    return points;
+  }
+  const spacingMetres = ACTIVE_TRAVEL_MANUAL_PATH_SAMPLE_SPACING_BY_MODE[mode] || 30;
+  const sampledPoints = [];
+  for (let index = 1; index < points.length; index += 1) {
+    const segmentSamples = sampleCoordinateSegment(points[index - 1], points[index], spacingMetres);
+    if (segmentSamples.length === 0) {
+      if (sampledPoints.length === 0) {
+        sampledPoints.push(points[index - 1]);
+      }
+      sampledPoints.push(points[index]);
+      continue;
+    }
+    if (sampledPoints.length > 0) {
+      segmentSamples.shift();
+    }
+    sampledPoints.push(...segmentSamples);
+  }
+  return dedupeCoordinates(sampledPoints, 6);
+}
+
+function addTemporarySnappedGraphNode(graph, coordinate, preferredId = "", options = {}) {
+  const snap = findNearestGraphSnap(graph, coordinate, options);
   const nodeId = addGraphNode(graph, coordinate, preferredId || null);
   if (!snap) {
     return nodeId;
@@ -3879,34 +4394,83 @@ function addTemporarySnappedGraphNode(graph, coordinate, preferredId = "") {
     return nodeId;
   }
 
-  const fromNode = graph.nodes.get(snap.edge.a);
-  const toNode = graph.nodes.get(snap.edge.b);
-  if (!fromNode || !toNode) {
+  const snappedEdgeNodeId = splitGraphEdgeAtCoordinate(graph, snap.edge, snap.coordinate);
+  const snappedEdgeNode = graph.nodes.get(snappedEdgeNodeId);
+  if (!snappedEdgeNode) {
     return nodeId;
   }
-  const lengthToA = getDistanceMetres(coordinate.latitude, coordinate.longitude, fromNode.latitude, fromNode.longitude);
-  const lengthToB = getDistanceMetres(coordinate.latitude, coordinate.longitude, toNode.latitude, toNode.longitude);
-  if (lengthToA > 0.5) {
-    addGraphEdge(graph, nodeId, snap.edge.a, {
-      lengthMetres: lengthToA,
-      bidirectional: true,
-      sourceType: "snap",
-    });
+  const snapLengthMetres = getDistanceMetres(
+    coordinate.latitude,
+    coordinate.longitude,
+    snappedEdgeNode.latitude,
+    snappedEdgeNode.longitude
+  );
+  if (snapLengthMetres <= 0.5) {
+    return snappedEdgeNodeId;
   }
-  if (lengthToB > 0.5) {
-    addGraphEdge(graph, nodeId, snap.edge.b, {
-      lengthMetres: lengthToB,
-      bidirectional: true,
-      sourceType: "snap",
-    });
-  }
+  addGraphEdge(graph, nodeId, snappedEdgeNodeId, {
+    lengthMetres: snapLengthMetres,
+    bidirectional: true,
+    sourceType: "snap",
+  });
   return nodeId;
 }
 
-function findNearestGraphSnap(graph, coordinate) {
+function splitGraphEdgeAtCoordinate(graph, edge, coordinate) {
+  const fromNode = graph.nodes.get(edge.a);
+  const toNode = graph.nodes.get(edge.b);
+  if (!fromNode || !toNode) {
+    return edge.a;
+  }
+  const lengthToA = getDistanceMetres(coordinate.latitude, coordinate.longitude, fromNode.latitude, fromNode.longitude);
+  const lengthToB = getDistanceMetres(coordinate.latitude, coordinate.longitude, toNode.latitude, toNode.longitude);
+  if (lengthToA <= 0.5) {
+    return edge.a;
+  }
+  if (lengthToB <= 0.5) {
+    return edge.b;
+  }
+
+  const splitNodeId = addGraphNode(
+    graph,
+    coordinate,
+    `split-${edge.id}-${coordinate.latitude.toFixed(6)}-${coordinate.longitude.toFixed(6)}`
+  );
+  if (edge.active !== false) {
+    edge.active = false;
+    addGraphEdge(graph, edge.a, splitNodeId, {
+      lengthMetres: lengthToA,
+      bidirectional: edge.bidirectional,
+      sourceType: edge.sourceType,
+      highway: edge.highway,
+      wayName: edge.wayName,
+      wayId: edge.wayId,
+      manualType: edge.manualType,
+      manualId: edge.manualId,
+    });
+    addGraphEdge(graph, splitNodeId, edge.b, {
+      lengthMetres: lengthToB,
+      bidirectional: edge.bidirectional,
+      sourceType: edge.sourceType,
+      highway: edge.highway,
+      wayName: edge.wayName,
+      wayId: edge.wayId,
+      manualType: edge.manualType,
+      manualId: edge.manualId,
+    });
+  }
+  return splitNodeId;
+}
+
+function findNearestGraphSnap(graph, coordinate, options = {}) {
   let best = null;
+  const ignoreNodeIds = options.ignoreNodeIds instanceof Set ? options.ignoreNodeIds : null;
+  const ignoreEdge = typeof options.ignoreEdge === "function" ? options.ignoreEdge : () => false;
 
   graph.nodes.forEach((node, nodeId) => {
+    if (ignoreNodeIds?.has(nodeId)) {
+      return;
+    }
     const distance = getDistanceMetres(coordinate.latitude, coordinate.longitude, node.latitude, node.longitude);
     if (distance <= ACTIVE_TRAVEL_SNAP_TOLERANCE_METRES && (!best || distance < best.distance)) {
       best = {
@@ -3919,7 +4483,7 @@ function findNearestGraphSnap(graph, coordinate) {
   });
 
   graph.edges.forEach((edge) => {
-    if (edge.active === false) {
+    if (edge.active === false || ignoreEdge(edge)) {
       return;
     }
     const fromNode = graph.nodes.get(edge.a);
@@ -3976,6 +4540,7 @@ function projectCoordinateOntoSegmentMetres(point, segmentStart, segmentEnd) {
   return {
     coordinate,
     distanceMetres: Math.hypot(projected.x - target.x, projected.y - target.y),
+    fraction: t,
   };
 }
 
@@ -4222,19 +4787,21 @@ function buildActiveTravelCatchmentRings(samples, mode) {
 
 function buildActiveTravelRingForCluster(cluster, mode) {
   const bufferMetres = ACTIVE_TRAVEL_BUFFER_BY_MODE[mode] || 55;
+  const smoothingIterations = ACTIVE_TRAVEL_SMOOTHING_ITERATIONS_BY_MODE[mode] ?? BUS_CARTO_SMOOTHING_ITERATIONS;
+  const radialBins = ACTIVE_TRAVEL_RADIAL_BINS_BY_MODE[mode] || BUS_CARTO_RADIAL_BINS;
   if (cluster.length === 1) {
-    return smoothRing(buildCoordinateBufferRing(cluster[0], bufferMetres, 18), BUS_CARTO_SMOOTHING_ITERATIONS);
+    return smoothRing(buildCoordinateBufferRing(cluster[0], bufferMetres, 18), smoothingIterations);
   }
   if (cluster.length === 2) {
     const buffered = buildBufferedRouteSegmentRing(cluster[0], cluster[1], bufferMetres);
-    return buffered ? smoothRing(buffered, BUS_CARTO_SMOOTHING_ITERATIONS) : null;
+    return buffered ? smoothRing(buffered, smoothingIterations) : null;
   }
   const expandedPoints = buildExpandedCoordinateCloud(cluster, bufferMetres, BUS_CARTO_HULL_POINT_SEGMENTS);
-  const hullRing = buildRadialEnvelopeHull(expandedPoints, BUS_CARTO_RADIAL_BINS);
+  const hullRing = buildRadialEnvelopeHull(expandedPoints, radialBins);
   if (!hullRing || hullRing.length < 4) {
     return null;
   }
-  return smoothRing(hullRing, BUS_CARTO_SMOOTHING_ITERATIONS);
+  return smoothRing(hullRing, smoothingIterations);
 }
 
 async function fetchIsochronesForScenario(originCoordinates, mode, options = {}) {
@@ -4283,7 +4850,7 @@ async function fetchBusIsochronesForScenario(originCoordinates, options = {}) {
         fallbackReason: reason,
         bodsDiagnosticStage: bodsError?.bodsDiagnosticStage || bodsError?.bodsDiagnostics?.stage || "unknown",
         bodsDiagnostics: bodsError?.bodsDiagnostics || null,
-        caveat: "No OSM corridor fallback is shown while BODS timetable mode is selected. Switch Bus method back to OSM corridor estimate for the indicative corridor model.",
+        caveat: "No substitute corridor estimate is shown when BODS timetable generation fails.",
       };
       return emptyIsochrones;
     }
@@ -4345,7 +4912,7 @@ async function fetchBodsTimetableIsochronesForScenario(originCoordinates, option
   const datasetUrls = datasetResult.downloadUrlsTried;
   const datasetRecordCount = datasetResult.datasetRecordCount;
   if (!timetable && datasetRecordCount === 0) {
-    throw createBodsDiagnosticError("no_datasets", "No BODS timetable datasets were found for this location. The search has tried local authority/search terms and broader fallback queries. Try OSM corridor mode while the BODS dataset index is unavailable.", {
+    throw createBodsDiagnosticError("no_datasets", "No BODS timetable datasets were found for this location. The search has tried local authority/search terms and broader fallback queries.", {
       datasetQueryParametersUsed: datasetResult.queryParametersUsed,
       datasetRecordCount,
       queryTerms: datasetResult.searchTerms?.map((term) => term.value),
@@ -4354,7 +4921,7 @@ async function fetchBodsTimetableIsochronesForScenario(originCoordinates, option
     });
   }
   if (!timetable && datasetResult.downloadUrlsTried.length === 0) {
-    throw createBodsDiagnosticError("no_downloadable_dataset_urls", `BODS returned ${datasetRecordCount.toLocaleString("en-GB")} timetable dataset record${datasetRecordCount === 1 ? "" : "s"}, but no downloadable TransXChange/XML/ZIP URL could be identified. Try OSM corridor mode while the BODS dataset metadata is unavailable.`, {
+    throw createBodsDiagnosticError("no_downloadable_dataset_urls", `BODS returned ${datasetRecordCount.toLocaleString("en-GB")} timetable dataset record${datasetRecordCount === 1 ? "" : "s"}, but no downloadable TransXChange/XML/ZIP URL could be identified.`, {
       datasetQueryParametersUsed: datasetResult.queryParametersUsed,
       datasetRecordCount,
       queryTerms: datasetResult.searchTerms?.map((term) => term.value),
@@ -4368,7 +4935,7 @@ async function fetchBodsTimetableIsochronesForScenario(originCoordinates, option
       : "";
     throw createBodsDiagnosticError(
       datasetResult.rejectedNonLocalDatasetCount > 0 ? "non_local_datasets" : "no_local_usable_datasets",
-      `BODS returned timetable datasets, but none appear local and usable for the selected origin.${nearestText} Check the planning authority/search terms or use OSM corridor mode.`,
+      `BODS returned timetable datasets, but none appear local and usable for the selected origin.${nearestText} Check the planning authority/search terms and dataset geography.`,
       {
         datasetQueryParametersUsed: datasetResult.queryParametersUsed,
         datasetRecordCount,
@@ -4387,7 +4954,7 @@ async function fetchBodsTimetableIsochronesForScenario(originCoordinates, option
     );
   }
   if (timetable.downloadedFileCount === 0) {
-    throw createBodsDiagnosticError("no_xml_downloaded", "BODS timetable datasets were found, but no XML/ZIP timetable files could be downloaded or extracted. Try again later or use OSM corridor mode.", {
+    throw createBodsDiagnosticError("no_xml_downloaded", "BODS timetable datasets were found, but no XML/ZIP timetable files could be downloaded or extracted. Try again later.", {
       datasetCount: datasetResult.downloadUrlsTried.length,
       querySpecsTried: datasetResult.querySpecsTried,
       warnings: timetable.warnings,
@@ -6227,7 +6794,7 @@ function diagnoseBodsTimetableSearchFailure(searchResult) {
       : "";
     return {
       stage: "no_stops_within_max_walk",
-      message: `No BODS timetable stops were found within the selected maximum walk-to-bus-stop distance.${nearestText} Increase the walk distance or use OSM corridor mode.`,
+      message: `No BODS timetable stops were found within the selected maximum walk-to-bus-stop distance.${nearestText} Increase the walk distance or check the selected location.`,
       details,
     };
   }
@@ -6235,7 +6802,7 @@ function diagnoseBodsTimetableSearchFailure(searchResult) {
   if (searchResult.consideredConnectionCount === 0) {
     return {
       stage: "no_departures_after_selected_time",
-      message: "BODS timetable stops were found within the selected walk distance, but no valid scheduled departures were found after the selected time within the configured look-ahead window. Try a different time/date or use OSM corridor mode.",
+      message: "BODS timetable stops were found within the selected walk distance, but no valid scheduled departures were found after the selected time within the configured look-ahead window. Try a different time or date.",
       details,
     };
   }
@@ -8020,32 +8587,59 @@ function buildSmoothedBusCatchmentRings(metrics) {
 }
 
 function clusterCoordinatesByDistance(coordinates, linkDistanceMetres) {
-  const remaining = new Set(coordinates.map((_, index) => index));
+  if (!Array.isArray(coordinates) || coordinates.length === 0) {
+    return [];
+  }
+
+  const centroid = getCoordinateCentroid(coordinates);
+  const cellSizeMetres = Math.max(1, Number(linkDistanceMetres) || 1);
+  const projected = coordinates.map((coordinate) => projectCoordinateToLocalMetres(coordinate, centroid));
+  const cellMembers = new Map();
+  const visited = new Array(coordinates.length).fill(false);
   const clusters = [];
 
-  while (remaining.size > 0) {
-    const seedIndex = remaining.values().next().value;
-    remaining.delete(seedIndex);
+  projected.forEach((point, index) => {
+    const cellX = Math.floor(point.x / cellSizeMetres);
+    const cellY = Math.floor(point.y / cellSizeMetres);
+    const key = `${cellX}|${cellY}`;
+    if (!cellMembers.has(key)) {
+      cellMembers.set(key, []);
+    }
+    cellMembers.get(key).push(index);
+  });
+
+  for (let seedIndex = 0; seedIndex < coordinates.length; seedIndex += 1) {
+    if (visited[seedIndex]) {
+      continue;
+    }
+
+    visited[seedIndex] = true;
     const clusterIndices = [seedIndex];
     const queue = [seedIndex];
 
-    while (queue.length > 0) {
-      const currentIndex = queue.shift();
-      const currentCoordinate = coordinates[currentIndex];
-      Array.from(remaining).forEach((candidateIndex) => {
-        const candidateCoordinate = coordinates[candidateIndex];
-        const distance = getDistanceMetres(
-          currentCoordinate.latitude,
-          currentCoordinate.longitude,
-          candidateCoordinate.latitude,
-          candidateCoordinate.longitude
-        );
-        if (distance <= linkDistanceMetres) {
-          remaining.delete(candidateIndex);
-          clusterIndices.push(candidateIndex);
-          queue.push(candidateIndex);
+    for (let queueIndex = 0; queueIndex < queue.length; queueIndex += 1) {
+      const currentIndex = queue[queueIndex];
+      const currentPoint = projected[currentIndex];
+      const baseCellX = Math.floor(currentPoint.x / cellSizeMetres);
+      const baseCellY = Math.floor(currentPoint.y / cellSizeMetres);
+
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+          const candidates = cellMembers.get(`${baseCellX + offsetX}|${baseCellY + offsetY}`) || [];
+          candidates.forEach((candidateIndex) => {
+            if (visited[candidateIndex]) {
+              return;
+            }
+            const candidatePoint = projected[candidateIndex];
+            const distance = Math.hypot(currentPoint.x - candidatePoint.x, currentPoint.y - candidatePoint.y);
+            if (distance <= linkDistanceMetres) {
+              visited[candidateIndex] = true;
+              clusterIndices.push(candidateIndex);
+              queue.push(candidateIndex);
+            }
+          });
         }
-      });
+      }
     }
 
     clusters.push(clusterIndices.map((index) => coordinates[index]));
@@ -8953,27 +9547,29 @@ function selectAmenitiesFromGroupedResults(grouped, mode) {
   const categoryLimits = getCategoryLimitsForMode(mode);
   const legendLimit = getLegendLimitForMode(mode);
   const selected = [];
+  const siteCoordinates = state.generatedScenario?.siteCoordinates ?? null;
 
   categoryOrder.forEach((category) => {
     const items = dedupeAmenitiesByName(grouped.get(category) ?? []);
     const categoryLimit = categoryLimits[category] ?? 0;
-    const selectedItems = mode === "cycling"
-      ? selectCyclingAmenitiesForCategory(items, category, categoryLimit)
-      : mode === "bus" && category === "Settlement"
+    const selectedItems = mode === "walking"
+      ? selectWalkingAmenitiesForCategory(items, category, categoryLimit, siteCoordinates)
+      : mode === "cycling"
+        ? selectCyclingAmenitiesForCategory(items, category, categoryLimit)
+        : mode === "bus" && category === "Settlement"
         ? selectBusSettlementsForCategory(items, categoryLimit)
         : items
             .sort((a, b) => a.distance - b.distance)
             .slice(0, categoryLimit);
-    selectedItems
-      .forEach((item, categoryItemIndex) => {
-        const markerStyle = getAmenityMarkerStyle(item, category);
-        item.id = selected.length + 1;
-        item.symbol = markerStyle.symbol;
-        item.color = markerStyle.color;
-        item.showInLegend = selected.length < legendLimit;
-        selected.push(item);
-      });
+    selectedItems.forEach((item) => {
+      const markerStyle = getAmenityMarkerStyle(item, category);
+      item.id = selected.length + 1;
+      item.symbol = markerStyle.symbol;
+      item.color = markerStyle.color;
+      item.showInLegend = selected.length < legendLimit;
+      selected.push(item);
     });
+  });
 
   return selected;
 }
@@ -9014,9 +9610,22 @@ function getCategoryLimitsForMode(mode) {
     return { Settlement: 9 };
   }
 
-  const defaultLimit = mode === "walking" ? 2 : 4;
+  if (mode === "walking") {
+    return {
+      "Bus stop": 3,
+      "Rail station": 2,
+      School: 3,
+      Healthcare: 3,
+      Retail: 4,
+      "Food and drink": 3,
+      Community: 2,
+      Worship: 2,
+      "Open space": 2,
+    };
+  }
+
   return Object.fromEntries(
-    getCategoryOrderForMode(mode).map((category) => [category, defaultLimit])
+    getCategoryOrderForMode(mode).map((category) => [category, 4])
   );
 }
 
@@ -9024,7 +9633,7 @@ function getLegendLimitForMode(mode) {
   if (mode === "cycling") {
       return 12;
   }
-  return mode === "walking" ? 6 : mode === "bus" ? 0 : 8;
+  return mode === "walking" ? 9 : mode === "bus" ? 0 : 8;
 }
 
 function dedupeAmenitiesByName(items) {
@@ -9039,6 +9648,170 @@ function dedupeAmenitiesByName(items) {
   });
 
   return Array.from(deduped.values());
+}
+
+function selectWalkingAmenitiesForCategory(items, category, limit, siteCoordinates) {
+  if (limit <= 0) {
+    return [];
+  }
+
+  const clusteredItems = buildWalkingAmenityRepresentatives(items, category);
+  if (clusteredItems.length <= limit) {
+    return clusteredItems.sort((a, b) => a.distance - b.distance);
+  }
+
+  const selected = [];
+  const remaining = clusteredItems
+    .map((item) => ({ ...item }))
+    .sort((a, b) => a.distance - b.distance);
+
+  selected.push(remaining.shift());
+
+  while (selected.length < limit && remaining.length > 0) {
+    let bestIndex = 0;
+    let bestScore = -Infinity;
+    remaining.forEach((item, index) => {
+      const score = scoreWalkingAmenityCandidate(item, selected, category, siteCoordinates);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    });
+    selected.push(remaining.splice(bestIndex, 1)[0]);
+  }
+
+  return selected;
+}
+
+function buildWalkingAmenityRepresentatives(items, category) {
+  const clusterDistance = getWalkingAmenityClusterDistance(category);
+  const clusters = [];
+
+  items.forEach((item) => {
+    const cluster = clusters.find((candidateCluster) =>
+      candidateCluster.some((candidateItem) =>
+        getDistanceMetres(
+          candidateItem.latitude,
+          candidateItem.longitude,
+          item.latitude,
+          item.longitude
+        ) <= clusterDistance
+      )
+    );
+
+    if (cluster) {
+      cluster.push(item);
+      return;
+    }
+
+    clusters.push([item]);
+  });
+
+  return clusters.map((cluster) =>
+    cluster
+      .slice()
+      .sort((left, right) => {
+        if (left.distance !== right.distance) {
+          return left.distance - right.distance;
+        }
+        return String(left.name).localeCompare(String(right.name));
+      })[0]
+  );
+}
+
+function scoreWalkingAmenityCandidate(item, selectedItems, category, siteCoordinates) {
+  const proximityScore = 1 / (1 + item.distance / getWalkingAmenityDistanceScale(category));
+  const separationScore = Math.min(
+    getMinimumWalkingAmenitySeparation(item, selectedItems) / getWalkingAmenityClusterDistance(category),
+    1.4
+  );
+  const angularScore = getWalkingAmenityAngularSpreadScore(item, selectedItems, siteCoordinates);
+  const nameDiversityScore = selectedItems.some((selectedItem) => simplifyAmenityName(selectedItem.name) === simplifyAmenityName(item.name))
+    ? 0
+    : 0.2;
+
+  if (category === "Bus stop") {
+    return proximityScore * 0.64 + separationScore * 0.2 + angularScore * 0.08 + nameDiversityScore * 0.08;
+  }
+
+  return proximityScore * 0.48 + separationScore * 0.32 + angularScore * 0.12 + nameDiversityScore * 0.08;
+}
+
+function getWalkingAmenityClusterDistance(category) {
+  return {
+    "Bus stop": 140,
+    "Rail station": 180,
+    School: 140,
+    Healthcare: 140,
+    Retail: 180,
+    "Food and drink": 180,
+    Community: 180,
+    Worship: 160,
+    "Open space": 260,
+  }[category] || 180;
+}
+
+function getWalkingAmenityDistanceScale(category) {
+  return {
+    "Bus stop": 280,
+    "Rail station": 700,
+    School: 850,
+    Healthcare: 850,
+    Retail: 520,
+    "Food and drink": 520,
+    Community: 720,
+    Worship: 720,
+    "Open space": 900,
+  }[category] || 650;
+}
+
+function getMinimumWalkingAmenitySeparation(item, selectedItems) {
+  if (!selectedItems.length) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return selectedItems.reduce((bestDistance, selectedItem) =>
+    Math.min(
+      bestDistance,
+      getDistanceMetres(
+        item.latitude,
+        item.longitude,
+        selectedItem.latitude,
+        selectedItem.longitude
+      )
+    ),
+  Number.POSITIVE_INFINITY);
+}
+
+function getWalkingAmenityAngularSpreadScore(item, selectedItems, siteCoordinates) {
+  if (!siteCoordinates || !selectedItems.length) {
+    return 0.6;
+  }
+
+  const itemBearing = getInitialBearingDegrees(siteCoordinates, item);
+  if (!Number.isFinite(itemBearing)) {
+    return 0.4;
+  }
+
+  const minimumBearingGap = selectedItems.reduce((bestGap, selectedItem) => {
+    const selectedBearing = getInitialBearingDegrees(siteCoordinates, selectedItem);
+    if (!Number.isFinite(selectedBearing)) {
+      return bestGap;
+    }
+    const rawGap = Math.abs(itemBearing - selectedBearing);
+    return Math.min(bestGap, Math.min(rawGap, 360 - rawGap));
+  }, 180);
+
+  return minimumBearingGap / 180;
+}
+
+function simplifyAmenityName(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(opposite|opp|adjacent|outside|near|stop|platform)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function cacheAmenitiesForScenario(siteCoordinates, mode, amenities) {
@@ -9664,18 +10437,22 @@ function projectLatLonToSvg(latitude, longitude, mapView) {
 }
 
 function buildIsochroneLayerMarkup(isochrones, mapView) {
-  const layers = isochrones.map((isochrone) => {
+  const layers = isochrones.map((isochrone, index) => {
     const pathMarkup = geometryToSvgPath(isochrone.geometry, mapView);
     if (!pathMarkup) {
-      return { fill: "", stroke: "" };
+      return { fill: "", stroke: "", pathMarkup: "", color: isochrone.color, clipPathId: `isochrone-band-${index}` };
     }
     return {
+      pathMarkup,
+      color: isochrone.color,
+      clipPathId: `isochrone-band-${index}`,
       fill: `<path d="${pathMarkup}" fill="${isochrone.color}" fill-opacity="0.32"></path>`,
       stroke: `<path d="${pathMarkup}" fill="none" stroke="${isochrone.color}" stroke-width="2"></path>`,
     };
   });
 
   return {
+    layers,
     fillMarkup: layers.map((layer) => layer.fill).join(""),
     strokeMarkup: layers.map((layer) => layer.stroke).join(""),
   };
@@ -9699,17 +10476,36 @@ function buildIsochroneExclusionMaskMarkup(exclusionAreas, mapView) {
   `;
 }
 
-function buildIsochroneExclusionOutlineMarkup(exclusionAreas, mapView) {
-  return exclusionAreas
-    .map((item) => {
-      const path = buildPolygonPathFromPoints(item.points, mapView);
-      if (!path) {
-        return "";
-      }
-      const style = getDrawingToolConfig("exclusion-area");
-      return `<path d="${path}" fill="none" stroke="${style.stroke}" stroke-width="${style.strokeWidth}" stroke-dasharray="${style.dasharray}" stroke-linejoin="round"></path>`;
-    })
+function buildIsochroneExclusionBoundaryMarkup(layers, exclusionAreas, mapView) {
+  const exclusionPaths = exclusionAreas
+    .map((item) => buildPolygonPathFromPoints(item.points, mapView))
+    .filter(Boolean);
+  const activeLayers = (layers || []).filter((layer) => layer.pathMarkup);
+  if (exclusionPaths.length === 0 || activeLayers.length === 0) {
+    return "";
+  }
+
+  const clipDefs = activeLayers
+    .map((layer) => `
+      <clipPath id="${layer.clipPathId}">
+        <path d="${layer.pathMarkup}"></path>
+      </clipPath>
+    `)
     .join("");
+  const boundaryMarkup = activeLayers
+    .map((layer) =>
+      exclusionPaths
+        .map((path) => `<path d="${path}" fill="none" stroke="${layer.color}" stroke-width="2" clip-path="url(#${layer.clipPathId})" stroke-linejoin="round"></path>`)
+        .join("")
+    )
+    .join("");
+
+  return `
+    <defs>
+      ${clipDefs}
+    </defs>
+    ${boundaryMarkup}
+  `;
 }
 
 function buildManualLineOverlayMarkup(lineEdits, mapView) {
@@ -9768,32 +10564,18 @@ function buildDraftDrawingMarkup(mapView) {
 }
 
 function buildManualOverlayLegendRows() {
-  const manualTypesPresent = new Set(state.manualLineEdits.map((item) => item.type));
-  const manualRows = MANUAL_LINE_TOOL_ORDER
-    .filter((type) => manualTypesPresent.has(type))
-    .map((type) => {
-      const style = getDrawingToolConfig(type);
+  return getAllSavedManualOverlays()
+    .filter((item) => item.showInLegend !== false)
+    .map((item) => {
+      const style = getDrawingToolConfig(item.type);
       return {
-        name: style.legendName,
-        type: "manual-line",
-        stroke: style.stroke,
-        dasharray: style.dasharray,
-        strokeWidth: style.strokeWidth,
+        name: item.displayName,
+        type: item.type === "exclusion-area" ? "exclusion-area" : "manual-line",
+        stroke: style?.stroke || "#1d2328",
+        dasharray: style?.dasharray || "",
+        strokeWidth: style?.strokeWidth || 3,
       };
     });
-
-  if (state.isochroneExclusionAreas.length > 0) {
-    const exclusionStyle = getDrawingToolConfig("exclusion-area");
-    manualRows.push({
-      name: exclusionStyle.legendName,
-      type: "exclusion-area",
-      stroke: exclusionStyle.stroke,
-      dasharray: exclusionStyle.dasharray,
-      strokeWidth: exclusionStyle.strokeWidth,
-    });
-  }
-
-  return manualRows;
 }
 
 function buildLinePathFromPoints(points, mapView) {
@@ -10083,4 +10865,3 @@ function csvEscape(value) {
 }
 
 init();
-
