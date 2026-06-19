@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy --config wrangler.toml",
-    "check": "node --check cloudflare/worker.js && node --check dist/app.nokeybus.v46.js && node tests/bus-speed-config.test.js",
-    "test": "node tests/bus-speed-config.test.js"
+    "check": "node --check cloudflare/worker.js && node --check dist/app.nokeybus.v46.js && node tests/bus-speed-config.test.js && node tests/active-travel-network.test.js && node tests/ui-static.test.js",
+    "test": "node tests/bus-speed-config.test.js && node tests/active-travel-network.test.js && node tests/ui-static.test.js"
   },
   "devDependencies": {
     "wrangler": "^4.98.0"
