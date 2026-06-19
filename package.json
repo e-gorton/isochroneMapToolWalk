@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy --config wrangler.toml",
-    "check": "node --check isochroneMapTool-main/cloudflare/worker.js && node --check isochroneMapTool-main/dist/app.nokeybus.v46.js && node isochroneMapTool-main/tests/bus-speed-config.test.js",
-    "test": "node isochroneMapTool-main/tests/bus-speed-config.test.js"
+    "check": "node --check isochroneMapTool-main/cloudflare/worker.js && node --check isochroneMapTool-main/dist/app.nokeybus.v46.js && node isochroneMapTool-main/tests/bus-speed-config.test.js && node isochroneMapTool-main/tests/active-travel-network.test.js && node isochroneMapTool-main/tests/ui-static.test.js",
+    "test": "node isochroneMapTool-main/tests/bus-speed-config.test.js && node isochroneMapTool-main/tests/active-travel-network.test.js && node isochroneMapTool-main/tests/ui-static.test.js"
   },
   "devDependencies": {
     "wrangler": "^4.99.0"
