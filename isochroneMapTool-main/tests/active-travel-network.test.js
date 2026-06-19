@@ -11,13 +11,22 @@ const htmlSource = readFileSync(join(projectRoot, "index.html"), "utf8");
 assert.match(htmlSource, /Draw walking path/, "Manual walking path tool should be present in the UI.");
 assert.match(htmlSource, /Draw cycling path/, "Manual cycling path tool should be present in the UI.");
 assert.match(htmlSource, /Draw isochrone exclusion area/, "Isochrone exclusion tool should be present in the UI.");
+assert.match(htmlSource, /workspace-toolbar/, "The map-first workspace toolbar should be present in the UI.");
 assert.match(appSource, /async function fetchLocalActiveTravelIsochronesForScenario/, "Walking/cycling modes should use the local active travel network builder.");
 assert.match(appSource, /return await fetchLocalActiveTravelIsochronesForScenario\(originCoordinates, mode, options\);/, "Walking/cycling isochrone fetch should route through the local network engine.");
 assert.match(appSource, /Dedicated pedestrian links and tagged sidewalks are used directly; ordinary local roads are permitted on a planning-style permissive basis unless restricted/, "Walking methodology note should describe the local permissive pavement-aware network rules.");
+assert.match(appSource, /function buildDraftScenarioFromInputs\(\)/, "Live coordinate preview should build a draft scenario before generation.");
+assert.match(appSource, /function selectWalkingAmenitiesForCategory\(/, "Walking amenities should use a dedicated ranking helper.");
 
 const fakeElement = (id) => ({
   id,
-  value: id === "busSpeedMph" ? "11.1847" : id === "busMaxWalkMetres" ? "400" : "",
+  value:
+    id === "busSpeedMph" ? "11.1847"
+      : id === "busMaxWalkMetres" ? "400"
+      : id === "siteCoordinates" ? "53.801672, -1.548567"
+      : id === "accessCoordinates" ? "53.801155, -1.547860"
+      : id === "mapZoomAdjust" ? "0"
+      : "",
   textContent: "",
   innerHTML: "",
   disabled: false,
@@ -68,6 +77,8 @@ vm.runInContext(
   globalThis.__addGraphEdge = addGraphEdge;
   globalThis.__applyManualActiveTravelEditsToGraph = applyManualActiveTravelEditsToGraph;
   globalThis.__runGraphDijkstra = runGraphDijkstra;
+  globalThis.__buildDraftScenarioFromInputs = buildDraftScenarioFromInputs;
+  globalThis.__selectWalkingAmenitiesForCategory = selectWalkingAmenitiesForCategory;
   `,
   sandbox
 );
@@ -91,6 +102,18 @@ assert.equal(
   sandbox.__isOsmWayCyclable({ highway: "residential" }),
   true,
   "Residential roads should remain cyclable unless explicitly restricted."
+);
+
+const previewScenario = sandbox.__buildDraftScenarioFromInputs();
+assert.equal(
+  Number(previewScenario.siteCoordinates.latitude.toFixed(6)),
+  53.801672,
+  "Valid site coordinates should build a live draft preview scenario before generation."
+);
+assert.equal(
+  Number(previewScenario.accessCoordinates.longitude.toFixed(6)),
+  -1.54786,
+  "Valid access coordinates should be carried into the live preview scenario."
 );
 
 const graph = sandbox.__createEmptyActiveTravelGraph("walking");
@@ -167,3 +190,37 @@ sandbox.__addGraphEdge(routingGraph, routingB, routingC, {
 
 const distances = sandbox.__runGraphDijkstra(routingGraph, routingA);
 assert.equal(Math.round(distances.get(routingC)), 75, "Local walking graph distances should accumulate across connected edges.");
+
+const walkingSelections = sandbox.__selectWalkingAmenitiesForCategory(
+  [
+    { name: "Near stop A", category: "Bus stop", latitude: 53.8, longitude: -1.55, distance: 90 },
+    { name: "Near stop B", category: "Bus stop", latitude: 53.80005, longitude: -1.55002, distance: 96 },
+    { name: "Village shops", category: "Bus stop", latitude: 53.806, longitude: -1.544, distance: 780 },
+    { name: "North stop", category: "Bus stop", latitude: 53.807, longitude: -1.55, distance: 810 },
+  ],
+  "Bus stop",
+  3,
+  { latitude: 53.8, longitude: -1.55 }
+);
+assert.equal(walkingSelections[0].name, "Near stop A", "Walking amenity ranking should keep the nearest representative bus stop first.");
+assert.ok(
+  walkingSelections.some((item) => item.name === "Village shops"),
+  "Walking amenity ranking should retain a more spatially distinct bus stop rather than only clustered duplicates."
+);
+
+const retailSelections = sandbox.__selectWalkingAmenitiesForCategory(
+  [
+    { name: "Corner Shop", category: "Retail", latitude: 53.8001, longitude: -1.55, distance: 110 },
+    { name: "Bakery Row", category: "Retail", latitude: 53.80011, longitude: -1.54999, distance: 114 },
+    { name: "Village Store", category: "Retail", latitude: 53.8034, longitude: -1.5469, distance: 460 },
+    { name: "East Parade", category: "Retail", latitude: 53.7995, longitude: -1.5428, distance: 520 },
+  ],
+  "Retail",
+  3,
+  { latitude: 53.8, longitude: -1.55 }
+);
+assert.equal(retailSelections[0].name, "Corner Shop", "Walking retail ranking should start with the nearest useful amenity.");
+assert.ok(
+  retailSelections.some((item) => item.name === "Village Store") && retailSelections.some((item) => item.name === "East Parade"),
+  "Walking retail ranking should spread later picks across different clusters instead of over-selecting adjacent shops."
+);
