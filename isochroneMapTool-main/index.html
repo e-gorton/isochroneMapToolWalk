@@ -83,29 +83,6 @@
             </p>
           </section>
 
-          <section class="rail-section">
-            <div class="section-heading">
-              <h2>Travel Modes</h2>
-              <span>Draft outputs</span>
-            </div>
-            <div class="mode-switch" role="tablist" aria-label="Travel mode">
-              <button class="mode-chip active" data-mode="walking" type="button">Walking</button>
-              <button class="mode-chip" data-mode="cycling" type="button">Cycling</button>
-              <button class="mode-chip" data-mode="bus" type="button">Bus</button>
-            </div>
-            <div id="bandSummary" class="band-summary" aria-live="polite"></div>
-            <button id="generateButton" class="primary-action" type="button">
-              Generate draft map
-            </button>
-            <div class="status-strip" role="status" aria-live="polite">
-              <div class="status-dot" id="statusDot"></div>
-              <div>
-                <strong id="statusTitle">Ready to generate</strong>
-                <p id="statusText">Waiting for a draft run.</p>
-              </div>
-            </div>
-          </section>
-
           <details class="rail-section advanced-panel">
             <summary>
               <span>Advanced Settings</span>
@@ -123,14 +100,6 @@
               <label>
                 <span>Bus bands</span>
                 <input id="busBands" type="text" value="15, 30, 45, 60 minutes" />
-              </label>
-              <label>
-                <span>Bus method</span>
-                <select id="busMethod">
-                  <option value="osm-corridor">OSM corridor estimate</option>
-                  <option value="bods-timetable">BODS timetable-based</option>
-                </select>
-                <small id="busMethodHint" class="field-hint">OSM corridor mode is fast and indicative. BODS mode uses the Cloudflare Worker secret BODS_API_KEY.</small>
               </label>
               <label>
                 <span>Timetable date</span>
@@ -245,13 +214,64 @@
               </div>
               <label>
                 <span>Bus note</span>
-                <textarea id="busNote" rows="3">Bus catchments are indicative OpenStreetMap bus-route corridor outputs. They are generated from mapped OSM bus route relations serving stops near the site and include pedestrian access from the site/access point to the boarding stop, based on a 4.8 kph walking speed. Remaining time within each band is applied to in-vehicle bus travel using an assumed bus speed of 18 kph. The outputs do not include timetable availability, service frequency, waiting time, interchanges, disruption or live running.</textarea>
+                <textarea id="busNote" rows="3">Bus catchments are timetable-based outputs generated from Bus Open Data Service timetable data where local TransXChange files can be parsed. Initial walking access is limited by the selected bus-stop walk threshold and transfer walking is estimated within the configured transfer radius. Scheduled wait time and in-vehicle bus running time are taken from parsed timetable links. The outputs do not include live disruption, reliability, cancellations, vehicle crowding or fare integration.</textarea>
               </label>
             </div>
           </details>
         </aside>
 
         <main class="main-stage">
+          <section class="workspace-toolbar" aria-label="Primary workspace controls">
+            <div class="toolbar-block toolbar-block-mode">
+              <div class="section-heading">
+                <h2>Travel mode</h2>
+                <span>Primary actions</span>
+              </div>
+              <div class="mode-switch" role="tablist" aria-label="Travel mode">
+                <button class="mode-chip active" data-mode="walking" type="button">Walking</button>
+                <button class="mode-chip" data-mode="cycling" type="button">Cycling</button>
+                <button class="mode-chip" data-mode="bus" type="button">Bus</button>
+              </div>
+              <div id="bandSummary" class="band-summary" aria-live="polite"></div>
+            </div>
+
+            <div class="toolbar-block toolbar-block-actions">
+              <div class="section-heading">
+                <h2>Run and view</h2>
+                <span>Always visible</span>
+              </div>
+              <div class="workspace-actions">
+                <button id="generateButton" class="primary-action" type="button">
+                  Generate draft map
+                </button>
+                <button id="recenterMapButton" class="secondary-action" type="button">
+                  Recenter map
+                </button>
+                <button id="togglePlacePointButton" class="secondary-action" type="button" aria-pressed="false">
+                  Place manual point
+                </button>
+                <button id="exportPngButton" class="secondary-action" type="button">Export PNG</button>
+                <button id="exportSvgButton" class="secondary-action" type="button">Export SVG</button>
+                <button id="exportCsvButton" class="ghost-action" type="button">Amenity CSV</button>
+                <button id="exportJsonButton" class="ghost-action" type="button">Method note JSON</button>
+              </div>
+            </div>
+
+            <div class="toolbar-block toolbar-block-status">
+              <div class="section-heading">
+                <h2>Workspace status</h2>
+                <span>Live preview</span>
+              </div>
+              <div class="status-strip" role="status" aria-live="polite">
+                <div class="status-dot" id="statusDot"></div>
+                <div>
+                  <strong id="statusTitle">Ready to generate</strong>
+                  <p id="statusText">Waiting for a draft run.</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <section class="preview-stage">
             <div class="panel-header">
               <div>
@@ -259,6 +279,11 @@
                 <h2>Report-style draft output</h2>
               </div>
               <div class="preview-actions">
+                <label class="zoom-control preview-zoom-control">
+                  <span>Zoom adjustment</span>
+                  <input id="mapZoomAdjust" type="range" min="-2" max="3" step="0.1" value="0" />
+                </label>
+                <p class="zoom-readout"><strong id="mapZoomAdjustValue">Auto fit</strong></p>
                 <button id="saveOverridesButton" class="secondary-action" type="button">
                   Save overrides
                 </button>
@@ -298,11 +323,6 @@
               <div>
                 <p class="eyebrow">Amenities And Legend</p>
                 <h2>Curate what appears on the plan</h2>
-              </div>
-              <div class="preview-actions">
-                <button id="togglePlacePointButton" class="secondary-action" type="button" aria-pressed="false">
-                  Place manual point
-                </button>
               </div>
             </div>
 
@@ -423,12 +443,6 @@
               </div>
             </div>
             <div class="outputs-grid">
-              <div class="export-list">
-                <button id="exportPngButton" class="primary-action" type="button">Export PNG</button>
-                <button id="exportSvgButton" class="secondary-action" type="button">Export SVG</button>
-                <button id="exportCsvButton" class="secondary-action" type="button">Amenity CSV</button>
-                <button id="exportJsonButton" class="secondary-action" type="button">Method note JSON</button>
-              </div>
               <div class="method-note">
                 <h3>Method note preview</h3>
                 <pre id="methodNote"></pre>
