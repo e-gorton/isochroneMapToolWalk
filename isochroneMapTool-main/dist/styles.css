@@ -640,6 +640,9 @@ textarea:focus-visible {
   border: 1px solid var(--line);
   background: var(--surface-strong);
   padding: 18px;
+  max-height: 640px;
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .method-note h3 {
