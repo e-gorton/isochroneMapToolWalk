@@ -8,8 +8,7 @@ const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const appSource = readFileSync(join(projectRoot, "app.nokeybus.v46.js"), "utf8");
 const htmlSource = readFileSync(join(projectRoot, "index.html"), "utf8");
 
-assert.match(htmlSource, /id="busMethod"/, "Bus method selector should be present in the UI.");
-assert.match(htmlSource, /BODS timetable-based/, "BODS timetable mode should be available in the UI.");
+assert.doesNotMatch(htmlSource, /id="busMethod"/, "Bus method selector should be removed from the public UI once BODS-only mode is active.");
 assert.match(htmlSource, /id="busSpeedMph"/, "Bus speed input should be present in the UI.");
 assert.match(htmlSource, /id="busMaxWalkMetres"/, "Bus maximum walk input should be present in the UI.");
 assert.match(htmlSource, /Maximum walk to bus stop \(m\)/, "Bus maximum walk input should be labelled in metres.");
@@ -18,6 +17,8 @@ assert.match(htmlSource, /Road-type weighted speed/, "Road-type weighted speed o
 assert.match(htmlSource, /Average bus speed \/ fallback speed \(mph\)/, "Bus speed input should be labelled in mph.");
 
 assert.match(appSource, /const BUS_DEFAULT_SPEED_KPH = 18;/, "Default bus speed should preserve the v28 18 kph assumption.");
+assert.match(appSource, /const BODS_MAX_TRANSFERS = 2;/, "BODS routing should allow two transfers.");
+assert.match(appSource, /const BODS_LOOKAHEAD_MINUTES = 240;/, "BODS routing should use the extended timetable look-ahead window.");
 assert.match(appSource, /const BUS_MAX_WALK_TO_STOP_DEFAULT_METRES = 400;/, "Default maximum bus stop walk distance should be 400 m.");
 assert.match(appSource, /const BUS_MAX_WALK_TO_STOP_MIN_METRES = 50;/, "Bus stop walk distance should have a lower validation bound.");
 assert.match(appSource, /const BUS_MAX_WALK_TO_STOP_MAX_METRES = 2000;/, "Bus stop walk distance should have an upper validation bound.");
@@ -61,6 +62,11 @@ assert.match(
   appSource,
   /accessWalkDistanceMetres > maximumWalkToBusStopMetres/,
   "Routed bus access anchors should be filtered by the selected maximum walk distance."
+);
+assert.match(
+  appSource,
+  /No substitute corridor estimate is shown when BODS timetable generation fails\./,
+  "BODS failure states should no longer instruct the user to switch back to an OSM fallback."
 );
 assert.match(
   appSource,
@@ -753,7 +759,7 @@ assert.ok(aliasedBodsSearchTerms.some((term) => term.value === "Liverpool City R
 const seftonProgressiveSpecs = sandbox.__buildBodsDatasetQuerySpecs(aliasedBodsSearchTerms);
 assert.ok(seftonProgressiveSpecs.some((spec) => spec.value === "Merseyside"), "Progressive BODS query specs should include Merseyside after Sefton/local authority terms.");
 assert.ok(seftonProgressiveSpecs.some((spec) => spec.kind === "fallback"), "Progressive BODS query specs should retain fallback queries if local query specs do not yield a usable local timetable.");
-assert.match(appSource, /async function fetchLocalBodsTimetableModelProgressively/, "BODS timetable mode should use progressive per-querySpec metadata/download/parse/locality search.");
+assert.match(appSource, /async function fetchLocalBodsTimetableModelProgressively/, "BODS timetable mode should use progressive per-querySpec metadata\/download\/parse\/locality search.");
 assert.match(appSource, /for \(let index = 0; index < querySpecs\.length; index \+= 1\)/, "Progressive BODS search should iterate all query specs, not stop at the old attempt limit.");
 assert.doesNotMatch(appSource, /querySpec\.kind === "fallback" && recordsSoFar\.length > 0/, "BODS fallback queries should not be skipped merely because metadata records exist.");
 assert.doesNotMatch(appSource, /Math\.max\(2,\s*Math\.min\(20,\s*Math\.round\(distance \/ 300\)\)\)/, "BODS timetable parsing should not use the old optimistic capped runtime fallback.");
@@ -779,7 +785,7 @@ assert.ok(
 
 assert.match(appSource, /async function fetchBodsTimetableIsochronesForScenario/, "BODS timetable fetcher should be implemented.");
 assert.match(appSource, /function runBodsEarliestArrivalSearch/, "BODS earliest-arrival search should be implemented.");
-assert.match(appSource, /BODS_API_KEY/, "Worker/client code should reference the BODS API key pathway without exposing a key.");
+assert.match(appSource, /BODS_API_KEY/, "Worker\/client code should reference the BODS API key pathway without exposing a key.");
 assert.match(appSource, /bodsDatasetQueryParametersUsed/, "BODS debug metadata should include dataset query parameters used.");
 assert.match(appSource, /bodsParseFailureCount/, "BODS debug metadata should include parse failure count.");
 assert.match(appSource, /bodsDiagnosticStage/, "BODS unavailable-result metadata should preserve the specific diagnostic stage.");
