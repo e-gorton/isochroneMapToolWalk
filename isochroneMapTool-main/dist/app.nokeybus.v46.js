@@ -200,6 +200,7 @@ const BODS_ROUTE_CORRIDOR_BUFFER_METRES = 350;
 const BODS_STOP_ENRICHMENT_RADIUS_METRES = 12000;
 const BODS_STOP_ENRICHMENT_MAX_IDS = 160;
 const BODS_LOCAL_DATASET_MAX_DISTANCE_METRES = 12000;
+const BODS_ORIGIN_STOP_DIAGNOSTIC_RADIUS_METRES = 100;
 const BODS_MAX_IMPLAUSIBLE_SPEED_KPH = 80;
 const BODS_ESTIMATED_RUNTIME_SPEED_KPH = 18;
 const BODS_TRANSPORT_AREA_ALIAS_RULES = [
@@ -539,9 +540,10 @@ const elements = {
   busColor3: document.getElementById("busColor3"),
   busColor4: document.getElementById("busColor4"),
   legendPosition: document.getElementById("legendPosition"),
-  mapZoomAdjust: document.getElementById("mapZoomAdjust"),
-  mapZoomAdjustValue: document.getElementById("mapZoomAdjustValue"),
-  recenterMapButton: document.getElementById("recenterMapButton"),
+  mapZoomAdjust: document.querySelector("[data-map-zoom-adjust]"),
+  mapZoomAdjustControls: Array.from(document.querySelectorAll("[data-map-zoom-adjust]")),
+  mapZoomAdjustValues: Array.from(document.querySelectorAll("[data-map-zoom-adjust-value]")),
+  recenterMapButtons: Array.from(document.querySelectorAll("[data-recenter-map-button]")),
   modeButtons: Array.from(document.querySelectorAll(".mode-chip")),
   bandSummary: document.getElementById("bandSummary"),
   modeLabel: document.getElementById("modeLabel"),
@@ -887,9 +889,13 @@ function bindEvents() {
   elements.busSpeedMph?.addEventListener("change", handleBusSpeedChange);
   elements.busSpeedModel?.addEventListener("change", handleBusSpeedChange);
   elements.busMaxWalkMetres?.addEventListener("change", handleBusMaxWalkChange);
-  elements.mapZoomAdjust.addEventListener("input", onMapZoomAdjustChange);
-  elements.mapZoomAdjust.addEventListener("change", onMapZoomAdjustChange);
-  elements.recenterMapButton.addEventListener("click", recenterMapView);
+  elements.mapZoomAdjustControls.forEach((control) => {
+    control.addEventListener("input", onMapZoomAdjustChange);
+    control.addEventListener("change", onMapZoomAdjustChange);
+  });
+  elements.recenterMapButtons.forEach((button) => {
+    button.addEventListener("click", recenterMapView);
+  });
 
   [elements.siteCoordinates, elements.accessCoordinates].forEach((control) => {
     control.addEventListener("input", handleCoordinateDraftChange);
@@ -939,10 +945,25 @@ function updateModeControls() {
   elements.bandSummary.textContent = `Default bands: ${labels}`;
   elements.modeLabel.textContent = config.label;
   elements.extentLabel.textContent = config.extent;
-  elements.mapZoomAdjustValue.textContent = formatMapZoomAdjustValue();
+  syncMapZoomControls();
   updateBusMethodControls();
   updateBusSpeedValidationState();
   updateBusMaxWalkValidationState();
+}
+
+function getCurrentMapZoomAdjustValue() {
+  return Number(elements.mapZoomAdjust?.value || 0);
+}
+
+function syncMapZoomControls(nextValue = getCurrentMapZoomAdjustValue()) {
+  const normalisedValue = Number.isFinite(Number(nextValue)) ? String(Number(nextValue)) : "0";
+  elements.mapZoomAdjustControls.forEach((control) => {
+    control.value = normalisedValue;
+  });
+  const label = formatMapZoomAdjustValue(Number(normalisedValue));
+  elements.mapZoomAdjustValues.forEach((element) => {
+    element.textContent = label;
+  });
 }
 
 function updateStatus() {
@@ -1182,7 +1203,7 @@ function renderMap() {
     scenario,
     state.isochrones,
     config.zoom,
-    Number(elements.mapZoomAdjust.value)
+    getCurrentMapZoomAdjustValue()
   );
   state.currentMapView = mapView;
   const site = projectLatLonToSvg(
@@ -1346,7 +1367,7 @@ function getDefaultPreviewMapView(scenario = getActiveScenarioForPreview()) {
     scenario,
     state.hasGeneratedDraft ? state.isochrones : [],
     MODE_CONFIG[state.selectedMode].zoom,
-    Number(elements.mapZoomAdjust.value)
+    getCurrentMapZoomAdjustValue()
   );
 }
 
@@ -2829,7 +2850,7 @@ function handleCoordinateDraftChange() {
     previousScenario,
     state.hasGeneratedDraft ? state.isochrones : [],
     MODE_CONFIG[state.selectedMode].zoom,
-    Number(elements.mapZoomAdjust.value)
+    getCurrentMapZoomAdjustValue()
   );
   const nextScenario = buildGeneratedScenario(siteCoordinates, accessCoordinates);
   state.generatedScenario = nextScenario;
@@ -2885,10 +2906,10 @@ async function handleBusMaxWalkChange() {
 }
 
 function onMapZoomAdjustChange() {
-  const nextZoomValue = Number(elements.mapZoomAdjust.value);
+  const nextZoomValue = Number(this?.value ?? getCurrentMapZoomAdjustValue());
   const zoomDelta = nextZoomValue - state.lastZoomControlValue;
   state.lastZoomControlValue = nextZoomValue;
-  elements.mapZoomAdjustValue.textContent = formatMapZoomAdjustValue();
+  syncMapZoomControls(nextZoomValue);
 
   if (zoomDelta === 0) {
     return;
@@ -2909,9 +2930,8 @@ function onMapZoomAdjustChange() {
 
 function recenterMapView() {
   cancelMapViewAnimation();
-  elements.mapZoomAdjust.value = "0";
   state.lastZoomControlValue = 0;
-  elements.mapZoomAdjustValue.textContent = formatMapZoomAdjustValue();
+  syncMapZoomControls(0);
   animateMapViewTo(getDefaultPreviewMapView(), 350);
 }
 
@@ -3162,8 +3182,7 @@ function wrapLegendLabel(text, maxWidth, fontSize) {
   return lines;
 }
 
-function formatMapZoomAdjustValue() {
-  const adjustValue = Number(elements.mapZoomAdjust.value);
+function formatMapZoomAdjustValue(adjustValue = getCurrentMapZoomAdjustValue()) {
   if (adjustValue === 0) {
     return "Auto fit";
   }
@@ -4955,6 +4974,7 @@ async function fetchBodsTimetableIsochronesForScenario(originCoordinates, option
       queryTerms: datasetResult.searchTerms?.map((term) => term.value),
       querySpecsTried: datasetResult.querySpecsTried,
       queryErrors: datasetResult.errors,
+      bodsDebugDiagnostics: datasetResult.bodsDebugDiagnostics,
     });
   }
   if (!timetable && datasetResult.downloadUrlsTried.length === 0) {
@@ -4964,6 +4984,7 @@ async function fetchBodsTimetableIsochronesForScenario(originCoordinates, option
       queryTerms: datasetResult.searchTerms?.map((term) => term.value),
       querySpecsTried: datasetResult.querySpecsTried,
       queryErrors: datasetResult.errors,
+      bodsDebugDiagnostics: datasetResult.bodsDebugDiagnostics,
     });
   }
   if (!timetable) {
@@ -4987,6 +5008,7 @@ async function fetchBodsTimetableIsochronesForScenario(originCoordinates, option
         nonLocalDatasetSamples: datasetResult.nonLocalDatasetSamples,
         warnings: datasetResult.warnings,
         queryErrors: datasetResult.errors,
+        bodsDebugDiagnostics: datasetResult.bodsDebugDiagnostics,
       }
     );
   }
@@ -4995,6 +5017,7 @@ async function fetchBodsTimetableIsochronesForScenario(originCoordinates, option
       datasetCount: datasetResult.downloadUrlsTried.length,
       querySpecsTried: datasetResult.querySpecsTried,
       warnings: timetable.warnings,
+      bodsDebugDiagnostics: datasetResult.bodsDebugDiagnostics,
     });
   }
   if (timetable.stops.length === 0) {
@@ -5015,6 +5038,7 @@ async function fetchBodsTimetableIsochronesForScenario(originCoordinates, option
       sampleMissingStopIds: timetable.sampleMissingStopIds,
       stopStructureSamples: timetable.stopStructureSamples,
       warnings: timetable.warnings,
+      bodsDebugDiagnostics: datasetResult.bodsDebugDiagnostics,
     });
   }
   if (timetable.connections.length === 0) {
@@ -5033,6 +5057,7 @@ async function fetchBodsTimetableIsochronesForScenario(originCoordinates, option
       sampleMissingStopIds: timetable.sampleMissingStopIds,
       stopStructureSamples: timetable.stopStructureSamples,
       warnings: timetable.warnings,
+      bodsDebugDiagnostics: datasetResult.bodsDebugDiagnostics,
     });
   }
 
@@ -5058,6 +5083,7 @@ async function fetchBodsTimetableIsochronesForScenario(originCoordinates, option
       sampleMissingStopIds: timetable.sampleMissingStopIds,
       stopStructureSamples: timetable.stopStructureSamples,
       connectionCount: timetable.connections.length,
+      bodsDebugDiagnostics: datasetResult.bodsDebugDiagnostics,
     });
   }
   isochrones.metadata = {
@@ -5076,10 +5102,18 @@ async function fetchBodsTimetableIsochronesForScenario(originCoordinates, option
     retainedInitialWalkStopCount: searchResult.retainedInitialWalkStopCount,
     transferWalkEdgeCount: searchResult.transferWalkEdgeCount,
     bodsDatasetQueryParametersUsed: datasetResult.queryParametersUsed,
+    bodsOriginCoordinatesUsed: formatBodsDiagnosticCoordinates(originCoordinates),
+    bodsSearchTerms: datasetResult.searchTerms?.map(summariseBodsSearchTerm),
     bodsQuerySpecsTried: datasetResult.querySpecsTried,
+    bodsQuerySpecsGenerated: datasetResult.querySpecs?.map(summariseBodsQuerySpec),
     bodsSelectedQuerySpec: datasetResult.selectedQuerySpec,
     bodsSelectedQuerySpecs: datasetResult.selectedQuerySpecs,
     bodsDownloadUrlsTried: datasetResult.downloadUrlsTried,
+    bodsDatasetRecordsReturned: datasetResult.bodsDebugDiagnostics?.datasetRecordsReturned,
+    bodsParsedDatasetDiagnostics: datasetResult.bodsDebugDiagnostics?.parsedDatasets,
+    bodsNearbyOriginStops: datasetResult.bodsDebugDiagnostics?.nearbyOriginStops,
+    bodsOriginStopComparison: datasetResult.bodsDebugDiagnostics?.originStopComparison,
+    bodsDebugDiagnostics: datasetResult.bodsDebugDiagnostics,
     bodsDatasetRecordCount: datasetResult.datasetRecordCount,
     bodsDatasetCount: datasetUrls.length,
     bodsLocalDatasetCount: timetable.localDatasetCount,
@@ -5095,6 +5129,7 @@ async function fetchBodsTimetableIsochronesForScenario(originCoordinates, option
     bodsRouteLinkCoordinateStopCount: timetable.routeLinkCoordinateStopCount,
     bodsEnrichedCoordinateStopCount: timetable.enrichedCoordinateStopCount,
     bodsUnresolvedCoordinateStopCount: timetable.unresolvedCoordinateStopCount,
+    bodsUnresolvedStopIds: timetable.unresolvedStopIds,
     bodsSampleMissingStopIds: timetable.sampleMissingStopIds,
     bodsParsedRuntimeConnectionCount: timetable.parsedRuntimeConnectionCount,
     bodsEstimatedRuntimeConnectionCount: timetable.estimatedRuntimeConnectionCount,
@@ -5142,6 +5177,7 @@ function createBodsDiagnosticError(stage, message, details = {}) {
 async function fetchLocalBodsTimetableModelProgressively(originCoordinates, maximumWalkToBusStopMetres, options = {}) {
   const searchTerms = await buildBodsTimetableDatasetSearchTerms(originCoordinates);
   const querySpecs = buildBodsDatasetQuerySpecs(searchTerms);
+  const nearbyOriginStops = await fetchNearbyOriginStopsForBodsDiagnostics(originCoordinates, options);
   const result = {
     timetable: null,
     searchTerms,
@@ -5160,6 +5196,17 @@ async function fetchLocalBodsTimetableModelProgressively(originCoordinates, maxi
     localDatasetMaxDistanceMetres: getBodsLocalDatasetMaxDistanceMetres(maximumWalkToBusStopMetres),
     nonLocalDatasetSamples: [],
     warnings: [],
+    bodsDebugDiagnostics: {
+      originCoordinates: formatBodsDiagnosticCoordinates(originCoordinates),
+      searchTerms: searchTerms.map(summariseBodsSearchTerm),
+      querySpecs: querySpecs.map(summariseBodsQuerySpec),
+      querySpecsTried: [],
+      datasetRecordsReturned: [],
+      downloadUrlsTried: [],
+      parsedDatasets: [],
+      nearbyOriginStops,
+      originStopComparison: null,
+    },
   };
   const seenRecordKeys = new Set();
   const seenDownloadUrls = new Set();
@@ -5170,6 +5217,7 @@ async function fetchLocalBodsTimetableModelProgressively(originCoordinates, maxi
       throw createServiceError(BODS_TIMETABLE_SERVICE_NAME, "cancelled", "BODS timetable dataset request was cancelled.");
     }
     result.querySpecsTried.push(summariseBodsQuerySpec(querySpec));
+    result.bodsDebugDiagnostics.querySpecsTried.push(summariseBodsQuerySpec(querySpec));
     collectBodsQueryParameterNames(querySpec).forEach((name) => {
       if (!result.queryParametersUsed.includes(name)) {
         result.queryParametersUsed.push(name);
@@ -5182,6 +5230,10 @@ async function fetchLocalBodsTimetableModelProgressively(originCoordinates, maxi
     try {
       const payload = await fetchBodsDatasetPayloadForQuerySpec(querySpec, options);
       const records = extractBodsDatasetRecords(payload);
+      const recordSummaries = records.map((record) => summariseBodsDatasetRecord(record, querySpec));
+      if (result.bodsDebugDiagnostics.datasetRecordsReturned.length < 200) {
+        result.bodsDebugDiagnostics.datasetRecordsReturned.push(...recordSummaries.slice(0, 200 - result.bodsDebugDiagnostics.datasetRecordsReturned.length));
+      }
       const newRecords = records.filter((record) => {
         const key = getBodsDatasetRecordKey(record);
         if (!key || seenRecordKeys.has(key)) {
@@ -5204,9 +5256,15 @@ async function fetchLocalBodsTimetableModelProgressively(originCoordinates, maxi
         continue;
       }
       result.downloadUrlsTried.push(...downloadUrls);
+      result.bodsDebugDiagnostics.downloadUrlsTried.push(...downloadUrls);
       setStatus("Parsing BODS timetables", `Parsing ${downloadUrls.length} BODS dataset${downloadUrls.length === 1 ? "" : "s"} from query ${index + 1}.`, "running");
       render();
-      const timetable = await buildLocalBodsTimetableModel(downloadUrls, { ...options, originCoordinates, maximumWalkToBusStopMetres });
+      const timetable = await buildLocalBodsTimetableModel(downloadUrls, {
+        ...options,
+        originCoordinates,
+        maximumWalkToBusStopMetres,
+        bodsDebugDiagnostics: result.bodsDebugDiagnostics,
+      });
       mergeBodsProgressiveDiagnostics(result, timetable);
       if (timetable.localDatasetCount > 0 && timetable.stops.length > 0 && timetable.connections.length > 0) {
         mergeProgressiveLocalBodsTimetable(result, timetable, querySpec);
@@ -5237,6 +5295,11 @@ async function fetchLocalBodsTimetableModelProgressively(originCoordinates, maxi
       result.timetable.nearestStopDistanceMetres = null;
     }
   }
+  result.bodsDebugDiagnostics.originStopComparison = buildBodsOriginStopComparison(
+    result.bodsDebugDiagnostics.nearbyOriginStops,
+    result.bodsDebugDiagnostics.parsedDatasets
+  );
+  console.debug("[BODS diagnostics] dataset search and stop parsing", result.bodsDebugDiagnostics);
   return result;
 }
 
@@ -5286,6 +5349,56 @@ function summariseBodsQuerySpec(querySpec) {
     source: querySpec.source,
     includeStatus: querySpec.includeStatus !== false,
     params: { ...(querySpec.params || {}) },
+  };
+}
+
+function summariseBodsSearchTerm(term) {
+  return {
+    value: term?.value || "",
+    source: term?.source || "",
+  };
+}
+
+function formatBodsDiagnosticCoordinates(coordinates) {
+  if (!coordinates) {
+    return null;
+  }
+  return {
+    latitude: Number(Number(coordinates.latitude).toFixed(7)),
+    longitude: Number(Number(coordinates.longitude).toFixed(7)),
+  };
+}
+
+function summariseBodsDatasetRecord(record, querySpec = null) {
+  const operator = firstNonEmpty(
+    record?.operatorName,
+    record?.operator_name,
+    record?.operator,
+    record?.organisationName,
+    record?.organisation_name,
+    record?.publisherName,
+    record?.publisher_name
+  );
+  const authority = firstNonEmpty(
+    record?.adminArea,
+    record?.admin_area,
+    record?.locality,
+    record?.localAuthority,
+    record?.local_authority,
+    record?.region,
+    record?.transportAuthority,
+    record?.transport_authority
+  );
+  const name = firstNonEmpty(record?.name, record?.title, record?.description, record?.dataset_name);
+  const id = firstNonEmpty(record?.id, record?.dataset_id, record?.datasetID, record?.datasetId);
+  return {
+    querySpec: querySpec ? summariseBodsQuerySpec(querySpec) : null,
+    id: id || null,
+    name: name || null,
+    operator: operator || null,
+    authority: authority || null,
+    status: firstNonEmpty(record?.status, record?.datasetStatus, record?.dataset_status) || null,
+    modified: firstNonEmpty(record?.modified, record?.modifiedDate, record?.lastModified, record?.last_modified) || null,
   };
 }
 
@@ -5595,10 +5708,21 @@ async function buildLocalBodsTimetableModel(datasetUrls, options = {}) {
     }
     const datasetUrl = datasetUrls[index];
     const model = await buildBodsTimetableModel([datasetUrl], options);
-    const nearestStopDistanceMetres = getNearestBodsStopDistanceMetres(model.stops, options.originCoordinates);
+    const nearestStop = getNearestBodsStopSummary(model.stops, options.originCoordinates);
+    const nearestStopDistanceMetres = nearestStop?.distanceMetres;
+    const acceptedAsLocal = isBodsTimetableModelLocalToOrigin(model, options.originCoordinates, options.maximumWalkToBusStopMetres);
+    options.bodsDebugDiagnostics?.parsedDatasets?.push(buildBodsParsedDatasetDiagnostic({
+      datasetUrl,
+      model,
+      originCoordinates: options.originCoordinates,
+      nearestStop,
+      acceptedAsLocal,
+      localDatasetMaxDistanceMetres,
+      nearbyOriginStops: options.bodsDebugDiagnostics?.nearbyOriginStops,
+    }));
     mergeBodsTimetableDiagnostics(combined, model);
 
-    if (!isBodsTimetableModelLocalToOrigin(model, options.originCoordinates, options.maximumWalkToBusStopMetres)) {
+    if (!acceptedAsLocal) {
       if (Number.isFinite(nearestStopDistanceMetres)) {
         combined.rejectedNonLocalDatasetCount += 1;
         combined.nearestRejectedStopDistanceMetres = Math.min(combined.nearestRejectedStopDistanceMetres ?? Infinity, nearestStopDistanceMetres);
@@ -5656,6 +5780,7 @@ function createEmptyBodsTimetableModelDiagnostics() {
     impliedSpeedKphValues: [],
     enrichedCoordinateStopCount: 0,
     unresolvedCoordinateStopCount: 0,
+    unresolvedStopIds: [],
     sampleMissingStopIds: [],
     stopStructureSamples: [],
     warnings: [],
@@ -5686,6 +5811,11 @@ function mergeBodsTimetableDiagnostics(target, model) {
   target.impliedSpeedStats = summariseBodsImpliedSpeeds(target.impliedSpeedKphValues);
   target.enrichedCoordinateStopCount += Number(model.enrichedCoordinateStopCount) || 0;
   target.unresolvedCoordinateStopCount += Number(model.unresolvedCoordinateStopCount) || 0;
+  model.unresolvedStopIds?.forEach((id) => {
+    if (target.unresolvedStopIds.length < BODS_STOP_ENRICHMENT_MAX_IDS && !target.unresolvedStopIds.includes(id)) {
+      target.unresolvedStopIds.push(id);
+    }
+  });
   model.sampleMissingStopIds?.forEach((id) => {
     if (target.sampleMissingStopIds.length < 12 && !target.sampleMissingStopIds.includes(id)) {
       target.sampleMissingStopIds.push(id);
@@ -5725,6 +5855,135 @@ function getNearestBodsStopDistanceMetres(stops, originCoordinates) {
     }
   });
   return Number.isFinite(nearest) ? nearest : null;
+}
+
+function getNearestBodsStopSummary(stops, originCoordinates) {
+  if (!originCoordinates || !Array.isArray(stops) || stops.length === 0) {
+    return null;
+  }
+  let nearestStop = null;
+  let nearestDistance = Infinity;
+  stops.forEach((stop) => {
+    const distance = getDistanceMetres(originCoordinates.latitude, originCoordinates.longitude, stop.latitude, stop.longitude);
+    if (Number.isFinite(distance) && distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestStop = stop;
+    }
+  });
+  if (!nearestStop || !Number.isFinite(nearestDistance)) {
+    return null;
+  }
+  return {
+    id: nearestStop.id,
+    name: nearestStop.name || nearestStop.id,
+    latitude: Number(Number(nearestStop.latitude).toFixed(7)),
+    longitude: Number(Number(nearestStop.longitude).toFixed(7)),
+    distanceMetres: Math.round(nearestDistance),
+    coordinateSource: nearestStop.coordinateSource || "unknown",
+  };
+}
+
+function buildBodsParsedDatasetDiagnostic({ datasetUrl, model, originCoordinates, nearestStop, acceptedAsLocal, localDatasetMaxDistanceMetres, nearbyOriginStops = [] }) {
+  const parsedStopIds = new Set((model.stops || []).map((stop) => normaliseBodsStopId(stop.id)).filter(Boolean));
+  const missingStopIds = new Set((model.unresolvedStopIds || model.sampleMissingStopIds || []).map(normaliseBodsStopId).filter(Boolean));
+  return {
+    datasetUrl,
+    acceptedAsLocal: Boolean(acceptedAsLocal),
+    localDatasetMaxDistanceMetres,
+    stopCount: model.stops?.length || 0,
+    connectionCount: model.connections?.length || 0,
+    nearestParsedStop: nearestStop,
+    coordinateSourceCounts: summariseBodsStopCoordinateSources(model.stops || []),
+    stopReferenceCount: model.stopReferenceCount || 0,
+    missingOrUnresolvedStopReferenceCount: model.unresolvedCoordinateStopCount || 0,
+    sampleMissingStopIds: model.sampleMissingStopIds || [],
+    unresolvedStopIdsCheckedForOriginMatch: model.unresolvedStopIds || model.sampleMissingStopIds || [],
+    parsedXmlFileCount: model.parsedXmlFileCount || 0,
+    downloadedFileCount: model.downloadedFileCount || 0,
+    parseFailureCount: model.parseFailureCount || 0,
+    nearbyOriginStopMatches: buildBodsNearbyStopMatches(originCoordinates, parsedStopIds, missingStopIds, nearbyOriginStops),
+  };
+}
+
+function summariseBodsStopCoordinateSources(stops) {
+  return (stops || []).reduce((summary, stop) => {
+    const source = stop.coordinateSource || "unknown";
+    summary[source] = (summary[source] || 0) + 1;
+    return summary;
+  }, {});
+}
+
+function buildBodsNearbyStopMatches(originCoordinates, parsedStopIds, missingStopIds, nearbyOriginStops = []) {
+  if (!originCoordinates || !Array.isArray(nearbyOriginStops) || nearbyOriginStops.length === 0) {
+    return [];
+  }
+  return nearbyOriginStops.filter((stop) => !stop.error).map((stop) => {
+    const ids = getBodsComparableStopIds(stop);
+    return {
+      name: stop.name || null,
+      atcoCode: stop.atcoCode || null,
+      naptanCode: stop.naptanCode || null,
+      distanceMetres: stop.distanceMetres,
+      idsChecked: ids,
+      presentInParsedStops: ids.some((id) => parsedStopIds.has(normaliseBodsStopId(id))),
+      presentInMissingStopRefs: ids.some((id) => missingStopIds.has(normaliseBodsStopId(id))),
+    };
+  });
+}
+
+function buildBodsOriginStopComparison(nearbyOriginStops, parsedDatasets) {
+  const nearbyStops = (nearbyOriginStops || []).filter((stop) => !stop.error);
+  if (nearbyStops.length === 0) {
+    return {
+      nearbyStopCountWithin100m: 0,
+      explanation: nearbyOriginStops?.[0]?.error || "No OSM/NaPTAN bus stop was found within 100 m of the BODS origin diagnostic point.",
+    };
+  }
+  const matches = nearbyStops.map((stop) => {
+    const ids = getBodsComparableStopIds(stop);
+    const matchedDatasets = (parsedDatasets || [])
+      .map((dataset) => {
+        const matchingRows = (dataset.nearbyOriginStopMatches || []).filter((match) =>
+          ids.some((id) => (match.idsChecked || []).some((candidate) => normaliseBodsStopId(candidate) === normaliseBodsStopId(id)))
+        );
+        if (!matchingRows.some((match) => match.presentInParsedStops || match.presentInMissingStopRefs)) {
+          return null;
+        }
+        return {
+          datasetUrl: dataset.datasetUrl,
+          acceptedAsLocal: dataset.acceptedAsLocal,
+          presentInParsedStops: matchingRows.some((match) => match.presentInParsedStops),
+          presentInMissingStopRefs: matchingRows.some((match) => match.presentInMissingStopRefs),
+        };
+      })
+      .filter(Boolean)
+    return {
+      name: stop.name,
+      atcoCode: stop.atcoCode,
+      naptanCode: stop.naptanCode,
+      distanceMetres: stop.distanceMetres,
+      idsChecked: ids,
+      matchedDatasets,
+    };
+  });
+  return {
+    nearbyStopCountWithin100m: nearbyStops.length,
+    matches,
+    explanation: matches.some((match) => match.matchedDatasets.length > 0)
+      ? "At least one nearby OSM/NaPTAN stop id appears in the parsed BODS stop references."
+      : "Nearby OSM/NaPTAN stop ids were not found in the parsed BODS stop ids or sampled missing stop references.",
+  };
+}
+
+function getBodsComparableStopIds(stop) {
+  return [
+    stop?.atcoCode,
+    stop?.naptanCode,
+  ].filter(Boolean).map((value) => String(value).trim()).filter(Boolean);
+}
+
+function normaliseBodsStopId(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 function isBodsTimetableModelLocalToOrigin(timetable, originCoordinates, maximumWalkToBusStopMetres) {
@@ -5842,6 +6101,7 @@ async function buildBodsTimetableModel(datasetUrls, options = {}) {
     impliedSpeedKphValues,
     enrichedCoordinateStopCount: enrichmentResult.resolvedStops.length,
     unresolvedCoordinateStopCount: enrichmentResult.unresolvedStopIds.length,
+    unresolvedStopIds: enrichmentResult.unresolvedStopIds.slice(0, BODS_STOP_ENRICHMENT_MAX_IDS),
     sampleMissingStopIds: enrichmentResult.unresolvedStopIds.slice(0, 12),
     stopStructureSamples,
     warnings,
@@ -5936,7 +6196,7 @@ async function enrichBodsMissingStopCoordinates(missingStopsById, existingStopsB
   }
 
   if (unresolved.size > 0 && options.allowExternalStopEnrichment !== false) {
-    const directIds = Array.from(unresolved.keys()).slice(0, 30);
+    const directIds = Array.from(unresolved.keys()).slice(0, BODS_STOP_ENRICHMENT_MAX_IDS);
     for (const id of directIds) {
       if (options.signal?.aborted) {
         throw createServiceError(BODS_TIMETABLE_SERVICE_NAME, "cancelled", "BODS stop enrichment was cancelled.");
@@ -5957,6 +6217,46 @@ async function enrichBodsMissingStopCoordinates(missingStopsById, existingStopsB
     warnings.push(`${unresolvedStopIds.length.toLocaleString("en-GB")} BODS stop reference${unresolvedStopIds.length === 1 ? "" : "s"} did not include coordinates and could not be resolved from local or external stop metadata.`);
   }
   return { resolvedStops: Array.from(resolvedById.values()), unresolvedStopIds, warnings };
+}
+
+async function fetchNearbyOriginStopsForBodsDiagnostics(originCoordinates, options = {}) {
+  if (!originCoordinates) {
+    return [];
+  }
+  try {
+    const query = `
+      [out:json][timeout:25];
+      (
+        node(around:${BODS_ORIGIN_STOP_DIAGNOSTIC_RADIUS_METRES},${originCoordinates.latitude},${originCoordinates.longitude})["highway"="bus_stop"];
+        node(around:${BODS_ORIGIN_STOP_DIAGNOSTIC_RADIUS_METRES},${originCoordinates.latitude},${originCoordinates.longitude})["public_transport"~"platform|stop_position"];
+      );
+      out body;
+    `;
+    const payload = await fetchOsmBusRouteOverpassPayload(query, { signal: options.signal }, 30000);
+    return (payload.elements || [])
+      .filter((element) => Number.isFinite(element.lat) && Number.isFinite(element.lon))
+      .map((element) => {
+        const tags = element.tags || {};
+        return {
+          osmId: element.id,
+          name: firstNonEmpty(tags.name, tags["naptan:CommonName"], tags["naptan:Street"], tags.ref) || null,
+          atcoCode: firstNonEmpty(tags["naptan:AtcoCode"], tags.atco_code, tags.AtcoCode) || null,
+          naptanCode: firstNonEmpty(tags["ref:GB:naptan"], tags["naptan:NaptanCode"], tags.naptanCode, tags.ref) || null,
+          latitude: Number(Number(element.lat).toFixed(7)),
+          longitude: Number(Number(element.lon).toFixed(7)),
+          distanceMetres: Math.round(getDistanceMetres(originCoordinates.latitude, originCoordinates.longitude, element.lat, element.lon)),
+        };
+      })
+      .sort((a, b) => a.distanceMetres - b.distanceMetres)
+      .slice(0, 20);
+  } catch (error) {
+    if (error?.kind === "cancelled") {
+      throw error;
+    }
+    return [{
+      error: `Nearby OSM/NaPTAN stop diagnostic lookup failed: ${error?.message || String(error)}`,
+    }];
+  }
 }
 
 async function fetchBodsStopCoordinatesFromOsm(stopIds, options = {}) {
@@ -6366,14 +6666,14 @@ function parseTxcStopCoordinate(node) {
   const latitude = parseFiniteCoordinateText(getFirstElementText(node, "Latitude"));
   const longitude = parseFiniteCoordinateText(getFirstElementText(node, "Longitude"));
   if (isPlausibleUkWgs84Coordinate(latitude, longitude)) {
-    return { latitude, longitude, coordinateSource: "wgs84" };
+    return { latitude, longitude, coordinateSource: "embedded_wgs84" };
   }
 
   const easting = parseFiniteCoordinateText(getFirstElementText(node, "Easting"));
   const northing = parseFiniteCoordinateText(getFirstElementText(node, "Northing"));
   const converted = convertBritishNationalGridToWgs84(easting, northing);
   if (converted && isPlausibleUkWgs84Coordinate(converted.latitude, converted.longitude)) {
-    return { ...converted, coordinateSource: "osgb36_bng" };
+    return { ...converted, coordinateSource: "converted_bng" };
   }
 
   return null;
