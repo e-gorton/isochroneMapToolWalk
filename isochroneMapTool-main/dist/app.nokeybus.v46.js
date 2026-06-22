@@ -202,7 +202,7 @@ const BODS_STOP_ENRICHMENT_MAX_IDS = 160;
 const BODS_LOCAL_DATASET_MAX_DISTANCE_METRES = 12000;
 const BODS_MAX_IMPLAUSIBLE_SPEED_KPH = 80;
 const BODS_ESTIMATED_RUNTIME_SPEED_KPH = 18;
-const BODS_CACHE_SCHEMA_VERSION = "v49-bus-origin-site-and-straightline-stop-check";
+const BODS_CACHE_SCHEMA_VERSION = "v50-bods-with-osm-fallback-and-site-origin";
 const BODS_TRANSPORT_AREA_ALIAS_RULES = [
   { pattern: /\b(liverpool|knowsley|sefton|st helens|wirral)\b/i, aliases: ["Merseyside", "Liverpool City Region"] },
   { pattern: /\b(leeds|bradford|wakefield|kirklees|calderdale)\b/i, aliases: ["West Yorkshire"] },
@@ -3012,11 +3012,9 @@ function getRoutingOriginCoordinatesForMode(mode, scenario) {
     return null;
   }
 
-  // Bus mode deliberately uses the visible development-site marker as the
-  // origin. Previously bus calculations silently used accessCoordinates when
-  // present, while the access marker was hidden in bus mode. That meant a user
-  // could place the visible site marker on a bus stop but BODS was actually
-  // searching from a different, hidden access point.
+  // Bus mode uses the visible site marker as the bus origin. The access marker
+  // is hidden in bus mode, so using accessCoordinates here creates a hidden
+  // origin misalignment and makes nearby bus stops appear kilometres away.
   if (mode === "bus") {
     return scenario.siteCoordinates;
   }
@@ -4899,19 +4897,44 @@ async function fetchBusIsochronesForScenario(originCoordinates, options = {}) {
       if (bodsError?.kind === "cancelled") {
         throw bodsError;
       }
-      const reason = bodsError?.userMessage || bodsError?.message || String(bodsError || "");
-      const emptyIsochrones = [];
-      emptyIsochrones.fallbackNotice = `BODS timetable catchments could not be generated.${reason ? ` Reason: ${reason}` : ""}`;
-      emptyIsochrones.sourceNote = `BODS timetable catchments could not be generated. ${buildBodsTimetableSourceNote({ fallbackReason: reason })}`;
-      emptyIsochrones.metadata = {
-        provider: "BODS timetable catchment unavailable",
-        intendedProvider: "BODS timetable-based bus catchment",
-        fallbackReason: reason,
-        bodsDiagnosticStage: bodsError?.bodsDiagnosticStage || bodsError?.bodsDiagnostics?.stage || "unknown",
-        bodsDiagnostics: bodsError?.bodsDiagnostics || null,
-        caveat: "No substitute corridor estimate is shown when BODS timetable generation fails.",
-      };
-      return emptyIsochrones;
+      const bodsReason = bodsError?.userMessage || bodsError?.message || String(bodsError || "");
+
+      try {
+        const osmFallbackIsochrones = await fetchOsmIndicativeBusRouteIsochronesForScenario(originCoordinates, options);
+        const osmSourceNote = buildOsmBusRouteSourceNote(osmFallbackIsochrones.metadata);
+        osmFallbackIsochrones.fallbackNotice = `BODS timetable catchments could not be generated.${bodsReason ? ` Reason: ${bodsReason}` : ""} Showing OpenStreetMap corridor estimate instead.`;
+        osmFallbackIsochrones.sourceNote = `BODS timetable catchments could not be generated, so this output uses the OpenStreetMap corridor estimate instead. ${osmSourceNote}`;
+        osmFallbackIsochrones.metadata = {
+          ...(osmFallbackIsochrones.metadata || {}),
+          provider: "OpenStreetMap bus route corridor catchment",
+          intendedProvider: "BODS timetable-based bus catchment",
+          fallbackProvider: "OpenStreetMap bus route corridor catchment",
+          fallbackReason: bodsReason,
+          bodsDiagnosticStage: bodsError?.bodsDiagnosticStage || bodsError?.bodsDiagnostics?.stage || "unknown",
+          bodsDiagnostics: bodsError?.bodsDiagnostics || null,
+          caveat: "BODS timetable data was unavailable or geographically unusable for this origin. The displayed output is an OSM corridor estimate, not a timetable-based public transport accessibility contour.",
+        };
+        return osmFallbackIsochrones;
+      } catch (osmFallbackError) {
+        if (osmFallbackError?.kind === "cancelled") {
+          throw osmFallbackError;
+        }
+        const fallbackReason = osmFallbackError?.userMessage || osmFallbackError?.message || String(osmFallbackError || "");
+        const emptyIsochrones = [];
+        emptyIsochrones.fallbackNotice = `BODS timetable catchments could not be generated.${bodsReason ? ` Reason: ${bodsReason}` : ""} OSM corridor fallback also failed.${fallbackReason ? ` Fallback reason: ${fallbackReason}` : ""}`;
+        emptyIsochrones.sourceNote = `BODS timetable catchments could not be generated and OSM corridor fallback also failed. ${buildBodsTimetableSourceNote({ fallbackReason: bodsReason })}`;
+        emptyIsochrones.metadata = {
+          provider: "Bus catchment unavailable",
+          intendedProvider: "BODS timetable-based bus catchment",
+          fallbackProvider: "OpenStreetMap bus route corridor catchment",
+          fallbackReason: bodsReason,
+          osmFallbackReason: fallbackReason,
+          bodsDiagnosticStage: bodsError?.bodsDiagnosticStage || bodsError?.bodsDiagnostics?.stage || "unknown",
+          bodsDiagnostics: bodsError?.bodsDiagnostics || null,
+          caveat: "Neither BODS timetable data nor the OSM corridor fallback could generate a bus catchment for this origin.",
+        };
+        return emptyIsochrones;
+      }
     }
   }
 
@@ -6858,7 +6881,7 @@ function diagnoseBodsTimetableSearchFailure(searchResult) {
       : "";
     return {
       stage: "no_stops_within_max_walk",
-      message: `No parsed BODS timetable stops were found within the selected maximum walk-to-bus-stop distance from the actual bus-mode origin.${nearestText} Bus mode now uses the visible development-site coordinates as its origin; if this still looks wrong, check the site coordinate field and the BODS dataset coverage for the local operator.`,
+      message: `No parsed BODS timetable stops were found within the selected maximum walk-to-bus-stop distance from the visible bus-mode origin.${nearestText} Bus mode uses the site coordinate marker as its origin. If this still appears wrong, check BODS dataset coverage or use the OSM corridor fallback note.`,
       details,
     };
   }
@@ -7184,9 +7207,9 @@ function buildBodsTimetableSourceNote(metadata = {}) {
   const precisionWarningText = geometrySummary.straightLineFallbackUsed || geometrySummary.estimatedRuntimeUsed || Number(metadata.bodsEstimatedRuntimeConnectionCount || 0) > 0
     ? " Warning: some timetable links use estimated runtimes or fallback geometry; treat the catchment as an indicative scheduled-accessibility output rather than a precise timetable-based route catchment."
     : "";
-  const walkText = Number.isFinite(Number(metadata.maximumWalkToBusStopMetres)) ? ` Initial boarding stops are limited to ${Math.round(metadata.maximumWalkToBusStopMetres).toLocaleString("en-GB")} m straight-line distance from the selected bus origin; walking time is then estimated using a 1.3 detour factor. Transfer walks are limited to ${Math.round(metadata.transferWalkRadiusMetres || BODS_TRANSFER_RADIUS_METRES).toLocaleString("en-GB")} m.` : "";
+  const walkText = Number.isFinite(Number(metadata.maximumWalkToBusStopMetres)) ? ` Initial boarding stops are limited to ${Math.round(metadata.maximumWalkToBusStopMetres).toLocaleString("en-GB")} m estimated walking access from the selected origin; transfer walks are limited to ${Math.round(metadata.transferWalkRadiusMetres || BODS_TRANSFER_RADIUS_METRES).toLocaleString("en-GB")} m.` : "";
   const warningText = metadata.timetableWarnings?.length ? ` Warnings: ${metadata.timetableWarnings.slice(0, 3).join(" | ")}.` : "";
-  return `Bus catchments are timetable-based outputs generated from Bus Open Data Service timetable datasets where TransXChange stop times can be parsed in-browser. Initial and transfer walking times use straight-line distance multiplied by a 1.3 detour factor and an assumed walking speed of 4.8 kph / 80 m per minute. Scheduled waiting time and bus in-vehicle running time use BODS scheduled stop times where parsed successfully. The outputs do not include live disruption, reliability, crowding, cancellations, fare integration or fare data.${originText}${dateText}${timeText}${walkText}${selectedQuerySpecText}${localDatasetText}${datasetText}${stopText}${coordinateText}${speedText}${geometryText}${precisionWarningText}${warningText}`;
+  return `Bus catchments are timetable-based outputs generated from Bus Open Data Service timetable datasets where TransXChange stop times can be parsed in-browser. Initial and transfer walking times use straight-line distance multiplied by a 1.3 detour factor and an assumed walking speed of 4.8 kph / 80 m per minute. Scheduled waiting time and bus in-vehicle running time use BODS scheduled stop times where parsed successfully. The outputs do not include live disruption, reliability, crowding, cancellations, fare integration or fare data.${dateText}${timeText}${walkText}${selectedQuerySpecText}${localDatasetText}${datasetText}${stopText}${coordinateText}${speedText}${geometryText}${precisionWarningText}${warningText}`;
 }
 
 function formatBodsQuerySpecForMethodNote(querySpec = {}) {
