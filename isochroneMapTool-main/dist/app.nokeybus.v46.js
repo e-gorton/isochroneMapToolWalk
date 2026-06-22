@@ -307,6 +307,7 @@ const BUS_CARTO_HULL_POINT_SEGMENTS = 10;
 const BUS_CARTO_SMOOTHING_ITERATIONS = 2;
 const ACTIVE_TRAVEL_NETWORK_CACHE = new Map();
 const ACTIVE_TRAVEL_GRAPH_CACHE = new Map();
+const ACTIVE_TRAVEL_ISOCHRONE_RESULT_CACHE = new Map();
 const ACTIVE_TRAVEL_NETWORK_FETCH_RADIUS_MARGIN_METRES = 1200;
 const ACTIVE_TRAVEL_BUFFER_BY_MODE = {
   walking: 55,
@@ -317,8 +318,8 @@ const ACTIVE_TRAVEL_SAMPLE_SPACING_BY_MODE = {
   cycling: 90,
 };
 const ACTIVE_TRAVEL_MANUAL_PATH_SAMPLE_SPACING_BY_MODE = {
-  walking: 24,
-  cycling: 36,
+  walking: 20,
+  cycling: 24,
 };
 const ACTIVE_TRAVEL_CLUSTER_LINK_BY_MODE = {
   walking: 220,
@@ -337,10 +338,13 @@ const ACTIVE_TRAVEL_SMOOTHING_ITERATIONS_BY_MODE = {
   cycling: 1,
 };
 const ACTIVE_TRAVEL_INTERSECTION_TOLERANCE_METRES = 22;
-const ACTIVE_TRAVEL_SNAP_TOLERANCE_METRES = 55;
-const ACTIVE_TRAVEL_MAX_SNAP_CANDIDATE_DISTANCE_METRES = 90;
+const ACTIVE_TRAVEL_SNAP_TOLERANCE_METRES = 60;
+const ACTIVE_TRAVEL_MAX_SNAP_CANDIDATE_DISTANCE_METRES = 120;
 const ACTIVE_TRAVEL_OSM_JUNCTION_STITCH_TOLERANCE_METRES = 14;
 const ACTIVE_TRAVEL_OSM_ENDPOINT_LINK_TOLERANCE_METRES = 10;
+const ACTIVE_TRAVEL_CONNECTIVITY_HEURISTIC_EDGE_LIMIT = 1800;
+const ACTIVE_TRAVEL_CONNECTIVITY_HEURISTIC_CANDIDATE_LIMIT = 240;
+const ACTIVE_TRAVEL_CONNECTIVITY_HEURISTIC_TERMINAL_LIMIT = 160;
 const ACTIVE_TRAVEL_DEFAULT_WALKING_SPEED_KPH = 4.8;
 const ACTIVE_TRAVEL_WALK_PERMISSIVE_HIGHWAYS = new Set([
   "residential",
@@ -3764,10 +3768,15 @@ async function fetchLocalActiveTravelIsochronesForScenario(originCoordinates, mo
 
   const networkRadiusMetres = getActiveTravelNetworkFetchRadiusMetres(configuredBands);
   const cacheKey = buildActiveTravelNetworkCacheKey(originCoordinates, mode, networkRadiusMetres);
+  const resultCacheKey = buildActiveTravelIsochroneCacheKey(originCoordinates, mode, configuredBands, networkRadiusMetres);
+  const cachedIsochrones = getMapCacheEntry(ACTIVE_TRAVEL_ISOCHRONE_RESULT_CACHE, resultCacheKey, cloneActiveTravelIsochroneResult);
+  if (cachedIsochrones) {
+    return cachedIsochrones;
+  }
   let payload = getMapCacheEntry(ACTIVE_TRAVEL_NETWORK_CACHE, cacheKey, clonePlainValue);
 
   if (!payload) {
-    payload = await fetchActiveTravelNetworkPayload(originCoordinates, networkRadiusMetres, options);
+    payload = await fetchActiveTravelNetworkPayload(originCoordinates, networkRadiusMetres, mode, options);
     setMapCacheEntry(ACTIVE_TRAVEL_NETWORK_CACHE, cacheKey, payload, clonePlainValue);
   }
 
@@ -3833,6 +3842,7 @@ async function fetchLocalActiveTravelIsochronesForScenario(originCoordinates, mo
         ? "Walking catchments are generated from a local OpenStreetMap-derived network. Dedicated pedestrian links and tagged sidewalks are used directly; ordinary local roads are permitted on a planning-style permissive basis unless restricted."
         : "Cycling catchments are generated from a local OpenStreetMap-derived network with user-authored route additions and barrier removals applied before polygon generation.",
   };
+  setMapCacheEntry(ACTIVE_TRAVEL_ISOCHRONE_RESULT_CACHE, resultCacheKey, outputs, cloneActiveTravelIsochroneResult);
   return outputs;
 }
 
@@ -3850,12 +3860,27 @@ function buildActiveTravelNetworkCacheKey(originCoordinates, mode, radiusMetres)
   ].join("|");
 }
 
-function buildActiveTravelNetworkOverpassQuery(originCoordinates, radiusMetres) {
+function buildActiveTravelNetworkOverpassQuery(originCoordinates, radiusMetres, mode) {
+  const allowedHighways = Array.from(
+    mode === "walking"
+      ? new Set([
+          ...ACTIVE_TRAVEL_WALK_PERMISSIVE_HIGHWAYS,
+          ...ACTIVE_TRAVEL_WALK_FOOTWAY_HIGHWAYS,
+          ...ACTIVE_TRAVEL_WALK_ROADS_REQUIRING_SIDEWALK,
+          "road",
+        ])
+      : new Set([
+          ...ACTIVE_TRAVEL_CYCLE_HIGHWAYS,
+          "footway",
+          "pedestrian",
+        ])
+  ).join("|");
   return `
 [out:json][timeout:45];
 (
   way(around:${Math.round(radiusMetres)},${originCoordinates.latitude},${originCoordinates.longitude})
     [highway]
+    [highway~"^(${allowedHighways})$"]
     [highway!~"construction|proposed|bus_guideway|raceway|corridor|elevator"];
 );
 (._;>;);
@@ -3863,9 +3888,9 @@ out body;
   `;
 }
 
-async function fetchActiveTravelNetworkPayload(originCoordinates, radiusMetres, options = {}) {
+async function fetchActiveTravelNetworkPayload(originCoordinates, radiusMetres, mode, options = {}) {
   let lastError = null;
-  const query = buildActiveTravelNetworkOverpassQuery(originCoordinates, radiusMetres);
+  const query = buildActiveTravelNetworkOverpassQuery(originCoordinates, radiusMetres, mode);
 
   for (const endpoint of OVERPASS_ENDPOINTS) {
     try {
@@ -3990,6 +4015,10 @@ function cloneActiveTravelGraph(graph) {
 }
 
 function strengthenOsmGraphConnectivity(graph) {
+  const activeOsmEdgeCount = graph.edges.filter((edge) => edge.active !== false && edge.sourceType === "osm").length;
+  if (activeOsmEdgeCount > ACTIVE_TRAVEL_CONNECTIVITY_HEURISTIC_EDGE_LIMIT) {
+    return;
+  }
   connectLowDegreeNodesToNearbyEdges(graph);
   bridgeNearbyTerminalNodes(graph);
 }
@@ -4060,6 +4089,9 @@ function buildActiveGraphDegreeMap(graph) {
 function connectLowDegreeNodesToNearbyEdges(graph) {
   const degreeByNodeId = buildActiveGraphDegreeMap(graph);
   const candidateNodeIds = Array.from(graph.nodes.keys()).filter((nodeId) => (degreeByNodeId.get(nodeId) || 0) <= 2);
+  if (candidateNodeIds.length > ACTIVE_TRAVEL_CONNECTIVITY_HEURISTIC_CANDIDATE_LIMIT) {
+    return;
+  }
 
   candidateNodeIds.forEach((nodeId) => {
     const node = graph.nodes.get(nodeId);
@@ -4119,6 +4151,9 @@ function bridgeNearbyTerminalNodes(graph) {
   const terminalNodes = Array.from(graph.nodes.entries())
     .filter(([nodeId]) => (degreeByNodeId.get(nodeId) || 0) === 1)
     .map(([nodeId, node]) => ({ nodeId, node }));
+  if (terminalNodes.length > ACTIVE_TRAVEL_CONNECTIVITY_HEURISTIC_TERMINAL_LIMIT) {
+    return;
+  }
 
   for (let index = 0; index < terminalNodes.length; index += 1) {
     for (let candidateIndex = index + 1; candidateIndex < terminalNodes.length; candidateIndex += 1) {
@@ -4278,6 +4313,7 @@ function applyManualActiveTravelEditsToGraph(graph, mode) {
             ignoreEdge: (edge) => edge.sourceType === "snap",
           });
           overlayTemporaryNodeIds.add(preferredId);
+          overlayTemporaryNodeIds.add(nodeId);
           return nodeId;
         })
         .filter((nodeId, index, allNodeIds) => index === 0 || nodeId !== allNodeIds[index - 1]);
@@ -4371,9 +4407,8 @@ function buildSampledManualOverlayPoints(overlay, mode) {
 
 function addTemporarySnappedGraphNode(graph, coordinate, preferredId = "", options = {}) {
   const snap = findNearestGraphSnap(graph, coordinate, options);
-  const nodeId = addGraphNode(graph, coordinate, preferredId || null);
   if (!snap) {
-    return nodeId;
+    return addGraphNode(graph, coordinate, preferredId || null);
   }
 
   if (snap.kind === "node") {
@@ -4386,6 +4421,7 @@ function addTemporarySnappedGraphNode(graph, coordinate, preferredId = "", optio
     if (lengthMetres <= 0.5) {
       return snap.nodeId;
     }
+    const nodeId = addGraphNode(graph, coordinate, preferredId || null);
     addGraphEdge(graph, nodeId, snap.nodeId, {
       lengthMetres,
       bidirectional: true,
@@ -4397,7 +4433,7 @@ function addTemporarySnappedGraphNode(graph, coordinate, preferredId = "", optio
   const snappedEdgeNodeId = splitGraphEdgeAtCoordinate(graph, snap.edge, snap.coordinate);
   const snappedEdgeNode = graph.nodes.get(snappedEdgeNodeId);
   if (!snappedEdgeNode) {
-    return nodeId;
+    return addGraphNode(graph, coordinate, preferredId || null);
   }
   const snapLengthMetres = getDistanceMetres(
     coordinate.latitude,
@@ -4408,6 +4444,7 @@ function addTemporarySnappedGraphNode(graph, coordinate, preferredId = "", optio
   if (snapLengthMetres <= 0.5) {
     return snappedEdgeNodeId;
   }
+  const nodeId = addGraphNode(graph, coordinate, preferredId || null);
   addGraphEdge(graph, nodeId, snappedEdgeNodeId, {
     lengthMetres: snapLengthMetres,
     bidirectional: true,
@@ -9833,6 +9870,29 @@ function buildScenarioCacheKey(siteCoordinates) {
   return `${siteCoordinates.latitude.toFixed(4)},${siteCoordinates.longitude.toFixed(4)}`;
 }
 
+function buildActiveTravelIsochroneCacheKey(originCoordinates, mode, configuredBands, networkRadiusMetres) {
+  const bandKey = configuredBands
+    .map((band) => `${band.label}:${Number(band.distance)}:${band.fill}`)
+    .join(",");
+  const manualKey = state.manualLineEdits
+    .filter((item) => Array.isArray(item.points) && item.points.length >= 2)
+    .map((item) => [
+      item.id,
+      item.type,
+      item.modeCreated || "",
+      item.points.map((point) => `${Number(point.latitude).toFixed(5)},${Number(point.longitude).toFixed(5)}`).join(";"),
+    ].join(":"))
+    .join("|");
+  return [
+    mode,
+    originCoordinates.latitude.toFixed(5),
+    originCoordinates.longitude.toFixed(5),
+    Math.round(networkRadiusMetres),
+    bandKey,
+    manualKey,
+  ].join("|");
+}
+
 function buildBusOriginCacheKey(originCoordinates, stopSearchRadiusMetres, maximumBandMinutes, maximumWalkToBusStopMetres = getSelectedBusMaxWalkToStopMetres() || BUS_MAX_WALK_TO_STOP_DEFAULT_METRES) {
   return [
     originCoordinates.latitude.toFixed(5),
@@ -9882,6 +9942,14 @@ function clonePlainValue(value) {
 }
 
 function cloneBusIsochroneResult(isochrones) {
+  const cloned = (isochrones ?? []).map((isochrone) => clonePlainValue(isochrone));
+  cloned.fallbackNotice = isochrones?.fallbackNotice || "";
+  cloned.sourceNote = isochrones?.sourceNote || "";
+  cloned.metadata = clonePlainValue(isochrones?.metadata);
+  return cloned;
+}
+
+function cloneActiveTravelIsochroneResult(isochrones) {
   const cloned = (isochrones ?? []).map((isochrone) => clonePlainValue(isochrone));
   cloned.fallbackNotice = isochrones?.fallbackNotice || "";
   cloned.sourceNote = isochrones?.sourceNote || "";
