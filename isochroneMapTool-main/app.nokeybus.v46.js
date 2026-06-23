@@ -11898,7 +11898,8 @@ function projectLatLonToSvg(latitude, longitude, mapView) {
 }
 
 function buildIsochroneLayerMarkup(isochrones, mapView) {
-  const layers = isochrones.map((isochrone, index) => {
+  const orderedIsochrones = [...isochrones].sort((a, b) => Number(b.contour ?? b.properties?.contour ?? 0) - Number(a.contour ?? a.properties?.contour ?? 0));
+  const layers = orderedIsochrones.map((isochrone, index) => {
     const pathMarkup = geometryToSvgPath(isochrone.geometry, mapView);
     if (!pathMarkup) {
       return { fill: "", stroke: "", pathMarkup: "", color: isochrone.color, clipPathId: `isochrone-band-${index}` };
