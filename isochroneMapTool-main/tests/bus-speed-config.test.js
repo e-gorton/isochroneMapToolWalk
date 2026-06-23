@@ -17,8 +17,15 @@ assert.match(htmlSource, /Road-type weighted speed/, "Road-type weighted speed o
 assert.match(htmlSource, /Average bus speed \/ fallback speed \(mph\)/, "Bus speed input should be labelled in mph.");
 
 assert.match(appSource, /const BUS_DEFAULT_SPEED_KPH = 18;/, "Default bus speed should preserve the v28 18 kph assumption.");
-assert.match(appSource, /const BODS_MAX_TRANSFERS = 2;/, "BODS routing should allow two transfers.");
+assert.match(appSource, /extent: "BODS timetable-based bus catchment"/, "Bus mode report wording should describe the default BODS timetable catchment, not an indicative OSM corridor.");
+assert.doesNotMatch(appSource, /Indicative bus route corridor catchments generated/, "Successful default bus generation should not describe BODS output as an indicative OSM corridor.");
+assert.match(appSource, /const BODS_MAX_TRANSFERS = 4;/, "BODS routing should allow controlled multi-leg transfer paths without falling back to OSM corridors.");
 assert.match(appSource, /const BODS_LOOKAHEAD_MINUTES = 240;/, "BODS routing should use the extended timetable look-ahead window.");
+assert.match(appSource, /const BODS_MAX_DATASETS = 96;/, "BODS discovery should inspect a broad but capped dataset page.");
+assert.match(appSource, /BODS_TIMETABLE_ZONE_MAX_METRICS_PER_BAND = 4500/, "BODS timetable whole-zone geometry should have a hard per-band metric cap.");
+assert.match(appSource, /buildBodsReachableRouteMetrics\(cappedStopMetrics, bandSegments, bandTime\)/, "BODS timetable catchments should use reachable route samples rather than drawing boxed link buffers first.");
+assert.match(appSource, /buildBodsWholeZoneCatchmentRings\(routeMetrics, searchResult\.originCoordinates\)/, "BODS timetable catchments should draw a coherent origin-connected whole-zone envelope.");
+assert.match(appSource, /capPolygonRings\(rings, 1\)/, "BODS timetable whole-zone outputs should keep a single origin-connected component per band.");
 assert.match(appSource, /const BUS_MAX_WALK_TO_STOP_DEFAULT_METRES = 400;/, "Default maximum bus stop walk distance should be 400 m.");
 assert.match(appSource, /const BUS_MAX_WALK_TO_STOP_MIN_METRES = 50;/, "Bus stop walk distance should have a lower validation bound.");
 assert.match(appSource, /const BUS_MAX_WALK_TO_STOP_MAX_METRES = 2000;/, "Bus stop walk distance should have an upper validation bound.");
@@ -29,21 +36,6 @@ assert.match(appSource, /const MPH_TO_KPH = 1\.609344;/, "mph to kph conversion 
 assert.match(appSource, /return BUS_DEFAULT_SPEED_KPH;/, "Displayed default mph should resolve back to exactly 18 kph internally.");
 assert.doesNotMatch(appSource, /BUS_ASSUMED_SPEED_METRES_PER_MINUTE/, "Bus speed should no longer be fixed at module load.");
 
-assert.match(
-  appSource,
-  /async function buildIndicativeBusIsochronesFromRoutes\(routes, configuredBands, busSpeedSettings = getSelectedBusSpeedSettings\(\)\)/,
-  "Bus catchment builder should accept configurable bus speed settings."
-);
-assert.match(
-  appSource,
-  /function buildRouteDistanceMetrics\(route, busSpeedSettings = getSelectedBusSpeedSettings\(\)\)/,
-  "Route metrics should accept configurable bus speed settings."
-);
-assert.match(
-  appSource,
-  /const inVehicleBusMinutes = Math\.abs\(cumulativeTravelTimes\[index\] - accessState\.cumulativeTravelTime\);/,
-  "In-vehicle bus time should be calculated from cumulative segment travel time."
-);
 assert.match(appSource, /const BUS_SPEED_MODEL_ROAD_TYPE = "road-type";/, "Road-type weighted speed mode should be defined.");
 assert.match(appSource, /const BUS_ROAD_TYPE_SPEED_KPH = {/, "Road-type speed profile should be defined.");
 assert.match(appSource, /function classifyBusRouteHighwayClass/, "OSM highway classes should be classified for bus timing.");
@@ -57,11 +49,6 @@ assert.match(
   appSource,
   /async function handleBusMaxWalkChange\(\)/,
   "Changing maximum walk to bus stop should have a dedicated refresh handler."
-);
-assert.match(
-  appSource,
-  /accessWalkDistanceMetres > maximumWalkToBusStopMetres/,
-  "Routed bus access anchors should be filtered by the selected maximum walk distance."
 );
 assert.match(
   appSource,
@@ -84,7 +71,7 @@ assert.match(
   "BODS timetable metadata should include transfer walk edge diagnostics."
 );
 
-assert.match(appSource, /BUS_LONG_RUNNING_NOTICE_MS = 75000/, "Bus mode should show a long-running notice after a sensible period.");
+assert.match(appSource, /BUS_LONG_RUNNING_NOTICE_MS = 45000/, "Bus mode should show a long-running notice before the page appears locked.");
 assert.match(
   appSource,
   /Bus isochrone calculation is still running\. Large catchments, lower average bus speeds or complex networks can take several minutes\./,
@@ -94,16 +81,16 @@ assert.match(appSource, /BUS_RELATION_PAYLOAD_CACHE = new Map\(\)/, "Bus relatio
 assert.match(appSource, /BUS_RELATION_GEOMETRY_CACHE = new Map\(\)/, "Bus relation geometry should be cached by relation id.");
 assert.match(appSource, /BUS_ACCESSIBLE_ROUTES_CACHE = new Map\(\)/, "Prepared accessible bus routes should be cached.");
 assert.match(appSource, /BUS_ISOCHRONE_RESULT_CACHE = new Map\(\)/, "Completed bus isochrone results should be cached.");
-assert.match(appSource, /BUS_ROUTE_GEOMETRY_INITIAL_CHUNK_SIZE = 12/, "Bus geometry loading should start with larger adaptive chunks.");
+assert.match(appSource, /BUS_ROUTE_GEOMETRY_INITIAL_CHUNK_SIZE = 6/, "OSM geometry loading should remain tightly capped because it is not the report-output engine.");
 assert.match(appSource, /BUS_ROUTE_GEOMETRY_MIN_CHUNK_SIZE = 3/, "Bus geometry loading should retain a safe smaller fallback chunk size.");
-assert.match(appSource, /BUS_ROUTE_GEOMETRY_CONCURRENCY = 2/, "Bus geometry loading should use conservative limited concurrency.");
+assert.match(appSource, /BUS_ROUTE_GEOMETRY_CONCURRENCY = 1/, "Bus geometry loading should use conservative single-worker concurrency.");
 assert.doesNotMatch(appSource, /BUS_ROUTE_GEOMETRY_CHUNK_SIZE = 3/, "Bus geometry loading should not use the old fixed small sequential chunk size.");
 assert.match(appSource, /function fetchOsmBusRouteGeometryChunkWithFallback/, "Bus geometry loading should split failed large chunks into smaller fallbacks.");
 assert.match(appSource, /function logBusGeometryDiagnostics/, "Bus geometry diagnostics should log cache use, timings and fallback behaviour.");
 assert.match(appSource, /function selectBalancedOsmBusRouteCandidates/, "Bus route candidates should use balanced geographic selection.");
 assert.match(appSource, /function logBusCandidateSelectionDiagnostics/, "Bus candidate diagnostics should be available in development mode.");
 assert.match(appSource, /function buildBusCandidateStops/, "Candidate bus stops should be pre-filtered once per calculation.");
-assert.match(appSource, /BUS_ACCESS_DISTANCE_CONCURRENCY = 4/, "Bus access routing should use conservative limited concurrency.");
+assert.match(appSource, /BUS_ACCESS_DISTANCE_CONCURRENCY = 3/, "Bus access routing should use conservative limited concurrency.");
 assert.match(appSource, /function yieldToBrowser\(\)/, "Long bus geometry work should yield to the browser.");
 assert.doesNotMatch(appSource, /two minutes/i, "User-facing two-minute bus calculation warnings should not be present.");
 
@@ -220,6 +207,7 @@ const sandbox = {
   document: {
     body: { classList: { toggle() {} } },
     getElementById: fakeElement,
+    querySelector() { return fakeElement("query"); },
     querySelectorAll() { return []; },
     createElement() { return fakeElement("created"); },
   },
@@ -261,11 +249,14 @@ vm.runInContext(
   globalThis.__buildBodsDatasetQuerySpecs = buildBodsDatasetQuerySpecs;
   globalThis.__selectBodsDatasetQuerySpecsForAttempt = selectBodsDatasetQuerySpecsForAttempt;
   globalThis.__addBodsTransportAreaAliasTerms = addBodsTransportAreaAliasTerms;
+  globalThis.__cleanBodsSearchTerm = cleanBodsSearchTerm;
   globalThis.__extractBodsDatasetDownloadUrls = extractBodsDatasetDownloadUrls;
   globalThis.__enrichBodsMissingStopCoordinates = enrichBodsMissingStopCoordinates;
   globalThis.__BODS_STOP_COORDINATE_CACHE = BODS_STOP_COORDINATE_CACHE;
   globalThis.__extractCoordinateFromNaptanPayload = extractCoordinateFromNaptanPayload;
   globalThis.__getNearestBodsStopDistanceMetres = getNearestBodsStopDistanceMetres;
+  globalThis.__getNearestRealBodsStopDistanceMetres = getNearestRealBodsStopDistanceMetres;
+  globalThis.__countBodsRealLocalStopsNearOrigin = countBodsRealLocalStopsNearOrigin;
   globalThis.__isBodsTimetableModelLocalToOrigin = isBodsTimetableModelLocalToOrigin;
   `,
   sandbox
@@ -275,6 +266,8 @@ const flatSettings = sandbox.__normaliseBusSpeedSettings(18);
 assert.equal(sandbox.__BUS_ACCESS_WALK_DETOUR_FACTOR, 1.3, "Bus access walk detour factor should evaluate to 1.3.");
 assert.equal(sandbox.__BUS_ACCESS_WALK_SPEED_METRES_PER_MINUTE, 80, "4.8 kph should evaluate to 80 m per minute.");
 assert.ok(Math.abs(sandbox.__estimateBusWalkTimeMinutes(400) - 6.5) < 0.000001, "400 m straight-line bus access walk should evaluate to 6.5 minutes.");
+assert.equal(sandbox.__cleanBodsSearchTerm("50"), "", "Short service refs should remain excluded from generic text searches.");
+assert.equal(sandbox.__cleanBodsSearchTerm("50", { keepShortCodes: true }), "", "Short service refs should not pollute BODS discovery even when a caller asks to keep short codes.");
 const motorwaySegment = sandbox.__getBusSegmentSpeedKph(
   { latitude: 0, longitude: 0, highwayClass: "motorway", maxspeed: "70 mph" },
   { latitude: 0, longitude: 0.01, highwayClass: "motorway", maxspeed: "70 mph" },
@@ -656,6 +649,46 @@ assert.ok(
   "Default Leeds BODS settings should draw a catchment when reachable timetable movement exists."
 );
 
+const leedsToHorsforthStops = [
+  { id: "CIVIC_O", name: "Civic O", latitude: 53.80165, longitude: -1.55105 },
+  { id: "KIRKSTALL", name: "Kirkstall Abbey", latitude: 53.82042, longitude: -1.60415 },
+  { id: "HORSFORTH_SCHOOL", name: "Horsforth School", latitude: 53.83575, longitude: -1.64188 },
+];
+const leedsToHorsforthTimetable = {
+  stops: leedsToHorsforthStops,
+  stopsById: new Map(leedsToHorsforthStops.map((stop) => [stop.id, stop])),
+  connections: [
+    {
+      fromStopId: "CIVIC_O",
+      toStopId: "KIRKSTALL",
+      departureMinutes: 9 * 60 + 17,
+      arrivalMinutes: 9 * 60 + 30,
+      routeRef: "50",
+      tripId: "route-50-test",
+      geometry: [leedsToHorsforthStops[0], leedsToHorsforthStops[1]],
+    },
+    {
+      fromStopId: "KIRKSTALL",
+      toStopId: "HORSFORTH_SCHOOL",
+      departureMinutes: 9 * 60 + 30,
+      arrivalMinutes: 9 * 60 + 44,
+      routeRef: "50",
+      tripId: "route-50-test",
+      geometry: [leedsToHorsforthStops[1], leedsToHorsforthStops[2]],
+    },
+  ],
+};
+const leedsToHorsforthSearch = sandbox.__runBodsEarliestArrivalSearch(leedsToHorsforthTimetable, defaultLeedsAccessOrigin, defaultBodsBands, 60, 400, 9 * 60 + 11);
+assert.equal(leedsToHorsforthSearch.initialStopsWithinMaxWalkCount, 1, "Default Leeds access point should be able to board at nearby Civic O within the 400 m maximum walk setting.");
+assert.ok(
+  leedsToHorsforthSearch.earliestByStop.some((entry) => entry.stop.id === "HORSFORTH_SCHOOL" && entry.earliestArrival <= 9 * 60 + 44),
+  "The BODS earliest-arrival engine should reach Horsforth School inside the expected 45 minute band when the route 50 timetable is present."
+);
+assert.ok(
+  leedsToHorsforthSearch.reachableStopsByBand[45] >= 3,
+  "A parsed route 50-style timetable should put Horsforth within the 45 minute BODS band from the default Leeds origin."
+);
+
 const noInitialStopsSearch = sandbox.__runBodsEarliestArrivalSearch(timetable, { latitude: 54.8, longitude: -2.55 }, bodsBands, 15, 50, 8 * 60);
 const noInitialStopsDiagnostic = sandbox.__diagnoseBodsTimetableSearchFailure(noInitialStopsSearch);
 assert.equal(noInitialStopsDiagnostic.stage, "no_stops_within_max_walk", "No nearby initial stops should produce the max-walk diagnostic.");
@@ -664,10 +697,12 @@ assert.ok(
   "No nearby initial stops should use the agreed user-facing message."
 );
 assert.match(noInitialStopsDiagnostic.message, /nearest parsed BODS timetable stop/i, "No-stop diagnostics should report the nearest parsed BODS timetable stop.");
-assert.ok(
-  sandbox.__isBodsInitialStopWithinSelectedWalkLimit(sandbox.__estimateBusWalkTimeMinutes(300) * sandbox.__BUS_ACCESS_WALK_SPEED_METRES_PER_MINUTE, 400)
-    && !sandbox.__isBodsInitialStopWithinSelectedWalkLimit(sandbox.__estimateBusWalkTimeMinutes(390) * sandbox.__BUS_ACCESS_WALK_SPEED_METRES_PER_MINUTE, 400),
-  "BODS stop eligibility should compare estimated walking distance, including the detour factor, with the selected maximum walk distance."
+assert.equal(sandbox.__isBodsInitialStopWithinSelectedWalkLimit(390, 400), true, "A stop 390 m straight-line from the origin should be eligible for a 400 m maximum walk setting.");
+assert.equal(sandbox.__isBodsInitialStopWithinSelectedWalkLimit(410, 400), false, "A stop 410 m straight-line from the origin should not be eligible for a 400 m maximum walk setting.");
+assert.equal(
+  sandbox.__isBodsInitialStopWithinSelectedWalkLimit(sandbox.__estimateBusWalkTimeMinutes(390) * sandbox.__BUS_ACCESS_WALK_SPEED_METRES_PER_MINUTE, 400),
+  false,
+  "The detoured 390 m equivalent exceeds 400 m, proving eligibility must not use the detour-adjusted distance."
 );
 
 const farAwayBodsTimetable = {
@@ -688,37 +723,8 @@ const noLaterDeparturesSearch = sandbox.__runBodsEarliestArrivalSearch(timetable
 const noLaterDeparturesDiagnostic = sandbox.__diagnoseBodsTimetableSearchFailure(noLaterDeparturesSearch);
 assert.equal(noLaterDeparturesDiagnostic.stage, "no_departures_after_selected_time", "No later departures should produce a specific no-departures diagnostic.");
 
-const sparseRings = sandbox.__buildSparseBodsCatchmentRings(
-  [],
-  [{
-    startCoordinate: { latitude: 53.8, longitude: -1.55 },
-    endCoordinate: { latitude: 53.80001, longitude: -1.55001 },
-    elapsedTimeAtEnd: 10,
-  }],
-  15
-);
-assert.ok(sparseRings.length > 0, "Sparse reachable BODS movement should still produce drawable fallback rings.");
-
-const longNoGeometrySparseRings = sandbox.__buildSparseBodsCatchmentRings(
-  [],
-  [{
-    startCoordinate: { latitude: 53.801, longitude: -1.548 },
-    endCoordinate: { latitude: 53.801, longitude: -1.248 },
-    elapsedTimeAtEnd: 15,
-    routeGeometry: [],
-  }],
-  15
-);
-assert.ok(longNoGeometrySparseRings.length > 0, "Sparse fallback without parsed route geometry should still draw stop-based buffers.");
-assert.ok(
-  longNoGeometrySparseRings.every((ring) => {
-    const longitudes = ring.map((point) => point[0]);
-    return Math.max(...longitudes) - Math.min(...longitudes) < 0.02;
-  }),
-  "Sparse fallback without parsed route geometry should not draw a straight buffered corridor between distant stops."
-);
-
 const clippedBandIsochrones = sandbox.__buildBodsTimetableIsochronesFromSearch({
+  originCoordinates: { latitude: 53.801, longitude: -1.548 },
   departureMinutes: 8 * 60,
   reachableSegments: [{
     startCoordinate: { latitude: 53.801, longitude: -1.548 },
@@ -759,11 +765,11 @@ assert.ok(aliasedBodsSearchTerms.some((term) => term.value === "Liverpool City R
 const seftonProgressiveSpecs = sandbox.__buildBodsDatasetQuerySpecs(aliasedBodsSearchTerms);
 assert.ok(seftonProgressiveSpecs.some((spec) => spec.value === "Merseyside"), "Progressive BODS query specs should include Merseyside after Sefton/local authority terms.");
 assert.ok(seftonProgressiveSpecs.some((spec) => spec.kind === "fallback"), "Progressive BODS query specs should retain fallback queries if local query specs do not yield a usable local timetable.");
-assert.match(appSource, /async function fetchLocalBodsTimetableModelProgressively/, "BODS timetable mode should use progressive per-querySpec metadata\/download\/parse\/locality search.");
+assert.match(appSource, /async function fetchLocalBodsTimetableModelProgressively/, "BODS timetable mode should use progressive per-querySpec metadata/download/parse/locality search.");
 assert.match(appSource, /for \(let index = 0; index < querySpecs\.length; index \+= 1\)/, "Progressive BODS search should iterate all query specs, not stop at the old attempt limit.");
 assert.doesNotMatch(appSource, /querySpec\.kind === "fallback" && recordsSoFar\.length > 0/, "BODS fallback queries should not be skipped merely because metadata records exist.");
 assert.doesNotMatch(appSource, /Math\.max\(2,\s*Math\.min\(20,\s*Math\.round\(distance \/ 300\)\)\)/, "BODS timetable parsing should not use the old optimistic capped runtime fallback.");
-assert.match(appSource, /BODS_MAX_IMPLAUSIBLE_SPEED_KPH = 80/, "BODS timetable parsing should reject implausibly fast links using a global speed threshold.");
+assert.match(appSource, /BODS_MAX_IMPLAUSIBLE_SPEED_KPH = 130/, "BODS timetable parsing should reject implausibly fast links using a global speed threshold while allowing urban express links.");
 assert.match(appSource, /bodsSelectedQuerySpecs/, "BODS method diagnostics should report all selected query specs merged into the local timetable model.");
 assert.match(appSource, /bodsEstimatedRuntimeConnectionCount/, "BODS method diagnostics should report estimated-runtime link counts.");
 assert.match(appSource, /bodsRejectedImplausibleConnectionCount/, "BODS method diagnostics should report rejected implausible-speed link counts.");
@@ -785,9 +791,37 @@ assert.ok(
 
 assert.match(appSource, /async function fetchBodsTimetableIsochronesForScenario/, "BODS timetable fetcher should be implemented.");
 assert.match(appSource, /function runBodsEarliestArrivalSearch/, "BODS earliest-arrival search should be implemented.");
-assert.match(appSource, /BODS_API_KEY/, "Worker\/client code should reference the BODS API key pathway without exposing a key.");
+assert.match(appSource, /BODS_API_KEY/, "Worker/client code should reference the BODS API key pathway without exposing a key.");
 assert.match(appSource, /bodsDatasetQueryParametersUsed/, "BODS debug metadata should include dataset query parameters used.");
 assert.match(appSource, /bodsParseFailureCount/, "BODS debug metadata should include parse failure count.");
 assert.match(appSource, /bodsDiagnosticStage/, "BODS unavailable-result metadata should preserve the specific diagnostic stage.");
+assert.match(appSource, /bodsSelectedQuerySpecs/, "BODS diagnostics should record the selected dataset query specs.");
+assert.match(appSource, /bodsDatasetRecordCount/, "BODS diagnostics should record returned BODS dataset record counts.");
+assert.match(appSource, /bodsLocalDatasetCount/, "BODS diagnostics should record local accepted dataset counts.");
+assert.match(appSource, /bodsNearestRealParsedStopDistanceMetres/, "BODS diagnostics should record nearest real parsed stop proximity.");
+assert.match(appSource, /reachableStopsByBand/, "BODS diagnostics should record reachable stop counts by band.");
+assert.match(appSource, /reachableConnectionsByBand/, "BODS diagnostics should record reachable connection counts by band.");
+assert.match(appSource, /BODS_CACHE_SCHEMA_VERSION = "v73-bods-default-fast-osm-guard"/, "BODS cache keys should be schema-busted for the BODS-default OSM-guarded model.");
+assert.match(appSource, /BODS_ORIGIN_ROUTE_HINT_RADIUS_METRES = 0/, "BODS discovery should disable broad OSM route-relation hints for report output.");
+assert.match(appSource, /BODS_MAX_ORIGIN_ROUTE_HINTS = 0/, "BODS discovery should not add route-ref or destination-based relation hints by default.");
+assert.match(appSource, /function shouldUseBodsDatasetFreeTextSearchTerm/, "BODS dataset search should explicitly filter unsafe free-text terms.");
+assert.match(appSource, /nearby-origin-stop-atco/, "BODS search terms should include nearby OSM/NaPTAN ATCO stop codes before wider authority terms.");
+assert.match(appSource, /BODS_AUTHORITY_ADMIN_AREA_CODE_RULES/, "BODS discovery should prioritise reliable numeric adminArea codes from known authority context.");
+assert.match(appSource, /countBodsRealLocalStopsNearOrigin/, "BODS local dataset acceptance should require real local stops, not only injected origin-stop matches.");
+assert.doesNotMatch(appSource, /slice\(0,\s*30\)/, "BODS NaPTAN enrichment should not retain the old first-30-unresolved-stops cap.");
 assert.match(appSource, /no_downloadable_dataset_urls/, "BODS diagnostics should distinguish zero records from missing dataset download URLs.");
 assert.doesNotMatch(appSource, /searchParams\.set\(["']boundingBox["']/, "BODS timetable dataset queries should not reintroduce boundingBox.");
+
+const realLocalStops = [
+  { id: "SYNTH", name: "Injected stop", latitude: 53.8, longitude: -1.55, coordinateSource: "nearby_origin_stop_code_match" },
+  { id: "REAL", name: "Real stop", latitude: 53.80001, longitude: -1.55001, coordinateSource: "naptan_api" },
+];
+assert.equal(
+  sandbox.__countBodsRealLocalStopsNearOrigin(realLocalStops, { latitude: 53.8, longitude: -1.55 }, 50),
+  1,
+  "BODS local dataset acceptance should count real nearby stops but ignore synthetic injected origin stops."
+);
+assert.ok(
+  sandbox.__getNearestRealBodsStopDistanceMetres(realLocalStops, { latitude: 53.8, longitude: -1.55 }) < 5,
+  "BODS diagnostics should retain the nearest real parsed stop distance near the origin."
+);
