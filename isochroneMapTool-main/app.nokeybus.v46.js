@@ -3344,6 +3344,7 @@ async function refreshLiveContext(statusText) {
     }
 
     state.isochrones = liveIsochrones;
+    state.currentMapView = null;
     state.lastIsochroneFallbackNotice = liveIsochrones.fallbackNotice || "";
     state.lastIsochroneSourceNote = liveIsochrones.sourceNote || "";
     setStatus(
@@ -8056,16 +8057,12 @@ function buildBodsTimetableIsochronesFromSearch(searchResult, configuredBands) {
       .filter((entry) => entry.earliestArrival - searchResult.departureMinutes <= bandTime)
       .forEach((entry) => stopMetrics.push({ coordinate: { latitude: entry.stop.latitude, longitude: entry.stop.longitude }, minimumTotalBusAccessTimeMinutes: entry.earliestArrival - searchResult.departureMinutes }));
 
-    let rings = buildBodsReachableLinkCorridorRings(stopMetrics, bandSegments, bandTime);
-    let geometryMode = rings.length > 0 ? "reachable_timetable_link_corridors" : "none";
-    let usedSparseGeometryFallback = rings.length > 0;
     const routeMetrics = buildBodsReachableRouteMetrics(stopMetrics, bandSegments, bandTime);
-
-    if (rings.length === 0 && routeMetrics.length > stopMetrics.length) {
-      rings = buildSmoothedBusCatchmentRings(routeMetrics);
-      geometryMode = rings.length > 0 ? "reachable_timetable_link_samples" : "none";
-      usedSparseGeometryFallback = false;
-    }
+    let rings = routeMetrics.length > stopMetrics.length
+      ? buildSmoothedBusCatchmentRings(routeMetrics)
+      : [];
+    let geometryMode = rings.length > 0 ? "smoothed_reachable_route_samples" : "none";
+    let usedSparseGeometryFallback = false;
 
     if (rings.length === 0 && stopMetrics.length > 0) {
       rings = buildSmoothedBusCatchmentRings(stopMetrics);
@@ -8358,15 +8355,6 @@ function buildSparseBodsCatchmentRings(metrics, reachableSegments, bandTime) {
   reachableSegments
     .filter((segment) => segment.elapsedTimeAtEnd <= bandTime)
     .forEach((segment) => {
-      const coordinates = getBodsReachableSegmentGeometryCoordinates(segment);
-      if (coordinates.length >= 2) {
-        buildBufferedRouteGeometryRings(coordinates, radiusMetres).forEach((ring) => {
-          if (rings.length < BUS_ROUTE_MAX_BUFFERS_PER_BAND) {
-            rings.push(ring);
-          }
-        });
-        return;
-      }
       if (rings.length < BUS_ROUTE_MAX_BUFFERS_PER_BAND && segment.startCoordinate) {
         rings.push(buildCoordinateBufferRing(segment.startCoordinate, radiusMetres, 16));
       }
