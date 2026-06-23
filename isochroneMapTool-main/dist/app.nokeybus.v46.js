@@ -185,13 +185,15 @@ const BUS_METHOD_LABELS = {
   [BUS_METHOD_BODS]: "BODS timetable-based",
 };
 const BODS_TIMETABLE_SERVICE_NAME = "BODS timetable data";
-const BODS_CACHE_SCHEMA_VERSION = "v64-bods-route-geometry-subpath";
+const BODS_CACHE_SCHEMA_VERSION = "v65-origin-route-hints";
 const BODS_MAX_DATASETS = 96;
 const BODS_MAX_DATASET_QUERY_RESULTS = 96;
 const BODS_MAX_DATASET_QUERY_ATTEMPTS = 40;
-const BODS_MAX_DATASETS_PER_QUERY = 18;
-const BODS_MAX_TOTAL_DOWNLOAD_URLS = 240;
+const BODS_MAX_DATASETS_PER_QUERY = 24;
+const BODS_MAX_TOTAL_DOWNLOAD_URLS = 320;
 const BODS_ORIGIN_STOP_SEARCH_RADIUS_METRES = 1200;
+const BODS_ORIGIN_ROUTE_HINT_RADIUS_METRES = 2200;
+const BODS_MAX_ORIGIN_ROUTE_HINTS = 36;
 const BODS_MAX_XML_FILES = 260;
 const BODS_MAX_CONNECTIONS = 120000;
 const BODS_MAX_STOPS = 20000;
@@ -5442,6 +5444,18 @@ async function buildBodsTimetableDatasetSearchTerms(originCoordinates) {
     addTerm(stop.operator, "nearby-origin-stop-operator", { priority: basePriority + 2 });
   });
 
+  const nearbyRouteHints = await fetchNearbyBodsOriginRouteHints(originCoordinates);
+  nearbyRouteHints.forEach((route, index) => {
+    const basePriority = Math.max(35, 112 - index * 2);
+    addTerm(route.ref, "nearby-origin-route-ref", { priority: basePriority + 10, keepShortCodes: true });
+    addTerm(route.name, "nearby-origin-route-name", { priority: basePriority + 8 });
+    addTerm(route.operator, "nearby-origin-route-operator", { priority: basePriority + 6 });
+    addTerm(route.network, "nearby-origin-route-network", { priority: basePriority + 5 });
+    addTerm(route.to, "nearby-origin-route-destination", { priority: basePriority + 7 });
+    addTerm(route.from, "nearby-origin-route-origin", { priority: basePriority + 4 });
+    route.via?.forEach((place) => addTerm(place, "nearby-origin-route-via", { priority: basePriority + 3 }));
+  });
+
   try {
     const authorityName = await lookupPlanningAuthorityForCoordinates(originCoordinates);
     addTerm(authorityName, "mapit-authority", { priority: 80 });
@@ -5490,6 +5504,75 @@ async function fetchNearbyBodsOriginStopSearchTerms(originCoordinates) {
     add(stop.operator, "nearby-origin-stop-operator", basePriority + 2);
   });
   return terms;
+}
+
+async function fetchNearbyBodsOriginRouteHints(originCoordinates, options = {}) {
+  if (!originCoordinates) {
+    return [];
+  }
+  try {
+    const query = buildNearbyBodsOriginRoutesOverpassQuery(originCoordinates, BODS_ORIGIN_ROUTE_HINT_RADIUS_METRES);
+    const payload = await fetchOsmBusRouteOverpassPayload(query, { signal: options.signal }, 45000);
+    const seen = new Set();
+    return (payload.elements || [])
+      .map(normaliseNearbyBodsOriginRouteHint)
+      .filter(Boolean)
+      .filter((route) => {
+        const key = [route.ref, route.name, route.operator, route.network, route.to].filter(Boolean).join("|").toLowerCase();
+        if (!key || seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      })
+      .slice(0, BODS_MAX_ORIGIN_ROUTE_HINTS);
+  } catch (error) {
+    if (error?.kind === "cancelled") {
+      throw error;
+    }
+    return [];
+  }
+}
+
+function buildNearbyBodsOriginRoutesOverpassQuery(originCoordinates, radiusMetres) {
+  const radius = Math.round(Number(radiusMetres) || BODS_ORIGIN_ROUTE_HINT_RADIUS_METRES);
+  return `
+[out:json][timeout:35];
+(
+  relation(around:${radius},${originCoordinates.latitude},${originCoordinates.longitude})["type"="route"]["route"~"^(bus|coach|trolleybus)$"];
+);
+out tags qt;
+  `;
+}
+
+function normaliseNearbyBodsOriginRouteHint(element) {
+  if (!element || element.type !== "relation") {
+    return null;
+  }
+  const tags = element.tags || {};
+  const routeMode = String(tags.route || "").toLowerCase();
+  if (tags.type !== "route" || !/^(bus|coach|trolleybus)$/.test(routeMode)) {
+    return null;
+  }
+  const ref = firstNonEmpty(tags.ref, tags.route_ref, tags["ref:route"]);
+  const name = firstNonEmpty(tags.name, tags.official_name, tags.description);
+  const operator = firstNonEmpty(tags.operator, tags["operator:short"], tags.brand);
+  const network = firstNonEmpty(tags.network, tags["network:short"]);
+  const from = firstNonEmpty(tags.from, tags.origin);
+  const to = firstNonEmpty(tags.to, tags.destination);
+  const via = splitBodsRouteHintList(firstNonEmpty(tags.via, tags.description));
+  if (!firstNonEmpty(ref, name, operator, network, from, to, via[0])) {
+    return null;
+  }
+  return { ref, name, operator, network, from, to, via };
+}
+
+function splitBodsRouteHintList(value) {
+  return String(value || "")
+    .split(/\s*(?:;|,|\bvia\b|->|=>|\/)\s*/i)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 3)
+    .slice(0, 8);
 }
 
 async function fetchNearbyBodsOriginStops(originCoordinates) {
