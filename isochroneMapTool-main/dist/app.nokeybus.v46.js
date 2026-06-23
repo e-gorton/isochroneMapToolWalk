@@ -185,18 +185,18 @@ const BUS_METHOD_LABELS = {
   [BUS_METHOD_BODS]: "BODS timetable-based",
 };
 const BODS_TIMETABLE_SERVICE_NAME = "BODS timetable data";
-const BODS_CACHE_SCHEMA_VERSION = "v73-bods-default-fast-osm-guard";
+const BODS_CACHE_SCHEMA_VERSION = "v74-leeds-reality-graph";
 const BODS_MAX_DATASETS = 96;
 const BODS_MAX_DATASET_QUERY_RESULTS = 96;
-const BODS_MAX_DATASET_QUERY_ATTEMPTS = 30;
-const BODS_MAX_DATASETS_PER_QUERY = 12;
-const BODS_MAX_TOTAL_DOWNLOAD_URLS = 180;
-const BODS_ORIGIN_STOP_SEARCH_RADIUS_METRES = 900;
+const BODS_MAX_DATASET_QUERY_ATTEMPTS = 36;
+const BODS_MAX_DATASETS_PER_QUERY = 18;
+const BODS_MAX_TOTAL_DOWNLOAD_URLS = 260;
+const BODS_ORIGIN_STOP_SEARCH_RADIUS_METRES = 1200;
 const BODS_ORIGIN_ROUTE_HINT_RADIUS_METRES = 0;
 const BODS_MAX_ORIGIN_ROUTE_HINTS = 0;
-const BODS_MAX_XML_FILES = 180;
-const BODS_MAX_CONNECTIONS = 120000;
-const BODS_MAX_STOPS = 12000;
+const BODS_MAX_XML_FILES = 320;
+const BODS_MAX_CONNECTIONS = 240000;
+const BODS_MAX_STOPS = 45000;
 const BODS_TRANSFER_RADIUS_METRES = 800;
 const BODS_TRANSFER_STOP_CAP = 10;
 const BODS_MAX_TRANSFERS = 4;
@@ -934,9 +934,9 @@ function bindEvents() {
   elements.busSpeedMph?.addEventListener("change", handleBusSpeedChange);
   elements.busSpeedModel?.addEventListener("change", handleBusSpeedChange);
   elements.busMaxWalkMetres?.addEventListener("change", handleBusMaxWalkChange);
-  elements.mapZoomAdjust.addEventListener("input", onMapZoomAdjustChange);
-  elements.mapZoomAdjust.addEventListener("change", onMapZoomAdjustChange);
-  elements.recenterMapButton.addEventListener("click", recenterMapView);
+  elements.mapZoomAdjust?.addEventListener("input", onMapZoomAdjustChange);
+  elements.mapZoomAdjust?.addEventListener("change", onMapZoomAdjustChange);
+  elements.recenterMapButton?.addEventListener("click", recenterMapView);
 
   [elements.siteCoordinates, elements.accessCoordinates].forEach((control) => {
     control.addEventListener("input", handleCoordinateDraftChange);
@@ -986,7 +986,9 @@ function updateModeControls() {
   elements.bandSummary.textContent = `Default bands: ${labels}`;
   elements.modeLabel.textContent = config.label;
   elements.extentLabel.textContent = config.extent;
-  elements.mapZoomAdjustValue.textContent = formatMapZoomAdjustValue();
+  if (elements.mapZoomAdjustValue) {
+    elements.mapZoomAdjustValue.textContent = formatMapZoomAdjustValue();
+  }
   updateBusMethodControls();
   updateBusSpeedValidationState();
   updateBusMaxWalkValidationState();
@@ -1229,7 +1231,7 @@ function renderMap() {
     scenario,
     state.isochrones,
     config.zoom,
-    Number(elements.mapZoomAdjust.value)
+    Number(elements.mapZoomAdjust?.value || 0)
   );
   state.currentMapView = mapView;
   const site = projectLatLonToSvg(
@@ -1393,7 +1395,7 @@ function getDefaultPreviewMapView(scenario = getActiveScenarioForPreview()) {
     scenario,
     state.hasGeneratedDraft ? state.isochrones : [],
     MODE_CONFIG[state.selectedMode].zoom,
-    Number(elements.mapZoomAdjust.value)
+    Number(elements.mapZoomAdjust?.value || 0)
   );
 }
 
@@ -2878,7 +2880,7 @@ function handleCoordinateDraftChange() {
     previousScenario,
     state.hasGeneratedDraft ? state.isochrones : [],
     MODE_CONFIG[state.selectedMode].zoom,
-    Number(elements.mapZoomAdjust.value)
+    Number(elements.mapZoomAdjust?.value || 0)
   );
   const nextScenario = buildGeneratedScenario(siteCoordinates, accessCoordinates);
   state.generatedScenario = nextScenario;
@@ -2934,10 +2936,12 @@ async function handleBusMaxWalkChange() {
 }
 
 function onMapZoomAdjustChange() {
-  const nextZoomValue = Number(elements.mapZoomAdjust.value);
+  const nextZoomValue = Number(elements.mapZoomAdjust?.value || 0);
   const zoomDelta = nextZoomValue - state.lastZoomControlValue;
   state.lastZoomControlValue = nextZoomValue;
-  elements.mapZoomAdjustValue.textContent = formatMapZoomAdjustValue();
+  if (elements.mapZoomAdjustValue) {
+    elements.mapZoomAdjustValue.textContent = formatMapZoomAdjustValue();
+  }
 
   if (zoomDelta === 0) {
     return;
@@ -2958,9 +2962,13 @@ function onMapZoomAdjustChange() {
 
 function recenterMapView() {
   cancelMapViewAnimation();
-  elements.mapZoomAdjust.value = "0";
+  if (elements.mapZoomAdjust) {
+    elements.mapZoomAdjust.value = "0";
+  }
   state.lastZoomControlValue = 0;
-  elements.mapZoomAdjustValue.textContent = formatMapZoomAdjustValue();
+  if (elements.mapZoomAdjustValue) {
+    elements.mapZoomAdjustValue.textContent = formatMapZoomAdjustValue();
+  }
   animateMapViewTo(getDefaultPreviewMapView(), 350);
 }
 
@@ -3212,7 +3220,7 @@ function wrapLegendLabel(text, maxWidth, fontSize) {
 }
 
 function formatMapZoomAdjustValue() {
-  const adjustValue = Number(elements.mapZoomAdjust.value);
+  const adjustValue = Number(elements.mapZoomAdjust?.value || 0);
   if (adjustValue === 0) {
     return "Auto fit";
   }
@@ -8492,6 +8500,292 @@ function buildBusIsochroneDiagnosticsForMethodNote(metadata = {}) {
     output_geometry_modes: metadata.bodsOutputGeometryModes,
     timetable_warning_samples: Array.isArray(metadata.timetableWarnings) ? metadata.timetableWarnings.slice(0, 8) : [],
   };
+}
+
+async function runBodsLeedsRealityTest(options = {}) {
+  const originCoordinates = options.originCoordinates
+    || parseCoordinatePair(elements.accessCoordinates?.value || "", true)
+    || parseCoordinatePair(DEFAULT_ACCESS_COORDINATES, true)
+    || parseCoordinatePair(DEFAULT_SITE_COORDINATES);
+  const departureDate = options.departureDate || getNextWeekdayDateString();
+  const departureTime = options.departureTime || "09:30";
+  const maximumWalkToBusStopMetres = Number(options.maximumWalkToBusStopMetres) || 400;
+  const previous = {
+    selectedMode: state.selectedMode,
+    busMethod: elements.busMethod?.value,
+    busDate: elements.busDate?.value,
+    busTime: elements.busTime?.value,
+    busMaxWalkMetres: elements.busMaxWalkMetres?.value,
+  };
+
+  const result = { ok: false, failures: [], diagnostics: null };
+  try {
+    state.selectedMode = "bus";
+    if (elements.busMethod) {
+      elements.busMethod.value = BUS_METHOD_BODS;
+    }
+    if (elements.busDate) {
+      elements.busDate.value = departureDate;
+    }
+    if (elements.busTime) {
+      elements.busTime.value = departureTime;
+    }
+    if (elements.busMaxWalkMetres) {
+      elements.busMaxWalkMetres.value = String(maximumWalkToBusStopMetres);
+    }
+
+    const isochrones = await fetchBodsTimetableIsochronesForScenario(originCoordinates, {});
+    const metadata = isochrones.metadata || {};
+    const diagnostics = buildBodsLeedsRealityDiagnostics({
+      originCoordinates,
+      departureDate,
+      departureTime,
+      maximumWalkToBusStopMetres,
+      isochrones,
+      metadata,
+    });
+    const failures = getBodsLeedsRealityFailures(diagnostics);
+    result.ok = failures.length === 0;
+    result.failures = failures;
+    result.diagnostics = diagnostics;
+    console.info("[BODS Leeds reality test]", result);
+    return result;
+  } catch (error) {
+    result.failures = [error?.userMessage || error?.message || String(error)];
+    result.diagnostics = {
+      busMethodUsed: BUS_METHOD_BODS,
+      osmCorridorUsed: false,
+      originCoordinates,
+      selectedDate: departureDate,
+      selectedTime: departureTime,
+      selectedMaxWalkMetres: maximumWalkToBusStopMetres,
+      error: error?.userMessage || error?.message || String(error),
+      bodsDiagnosticStage: error?.bodsDiagnosticStage || error?.bodsDiagnostics?.stage || null,
+      bodsDiagnostics: error?.bodsDiagnostics || null,
+    };
+    console.warn("[BODS Leeds reality test]", result);
+    return result;
+  } finally {
+    state.selectedMode = previous.selectedMode;
+    if (elements.busMethod && previous.busMethod !== undefined) {
+      elements.busMethod.value = previous.busMethod;
+    }
+    if (elements.busDate && previous.busDate !== undefined) {
+      elements.busDate.value = previous.busDate;
+    }
+    if (elements.busTime && previous.busTime !== undefined) {
+      elements.busTime.value = previous.busTime;
+    }
+    if (elements.busMaxWalkMetres && previous.busMaxWalkMetres !== undefined) {
+      elements.busMaxWalkMetres.value = previous.busMaxWalkMetres;
+    }
+  }
+}
+
+function buildBodsLeedsRealityDiagnostics({ originCoordinates, departureDate, departureTime, maximumWalkToBusStopMetres, isochrones, metadata }) {
+  const geometryBoundsByBand = buildIsochroneGeometryBoundsByBand(isochrones, originCoordinates);
+  const maximumDistanceReachedByBand = Object.fromEntries(
+    Object.entries(geometryBoundsByBand).map(([band, details]) => [band, details.maximumDistanceMetres])
+  );
+  const disconnectedGeometryComponents = (isochrones || []).reduce((total, isochrone) => total + countGeometryComponents(isochrone.geometry), 0);
+  const radialDirections = countMeaningfulRadialDirections(isochrones, originCoordinates);
+  const methodNote = buildBodsTimetableSourceNote(metadata);
+
+  return {
+    busMethodUsed: BUS_METHOD_BODS,
+    osmCorridorUsed: false,
+    selectedDate: departureDate,
+    selectedTime: departureTime,
+    selectedMaxWalkMetres: maximumWalkToBusStopMetres,
+    originCoordinates,
+    bodsQuerySpecsTried: metadata.bodsQuerySpecsTried || [],
+    bodsSelectedQuerySpecs: metadata.bodsSelectedQuerySpecs || metadata.bodsSelectedQuerySpec || [],
+    datasetCount: metadata.bodsDatasetCount ?? metadata.datasetCount ?? 0,
+    downloadedFileCount: metadata.bodsDownloadedFileCount ?? metadata.downloadedFileCount ?? 0,
+    parsedFileCount: metadata.bodsParsedFileCount ?? metadata.parsedXmlFileCount ?? 0,
+    stopCount: metadata.stopCount ?? 0,
+    connectionCount: metadata.connectionCount ?? 0,
+    initialStopCount: metadata.initialStopCount ?? 0,
+    initialStopsWithinWalkLimit: metadata.initialStopsWithinMaxWalkCount ?? 0,
+    consideredConnectionCount: metadata.consideredConnectionCount ?? 0,
+    reachableStopCount: metadata.reachableStopCount ?? 0,
+    reachableConnectionCount: metadata.reachableConnectionCount ?? 0,
+    reachableStopsByBand: metadata.reachableStopsByBand || {},
+    reachableConnectionsByBand: metadata.reachableConnectionsByBand || {},
+    geometryBoundsByBand,
+    maximumDistanceReachedByBand,
+    disconnectedGeometryComponents,
+    meaningfulRadialDirectionCount: radialDirections.count,
+    meaningfulRadialDirections: radialDirections.directions,
+    outputGeometryModes: metadata.bodsOutputGeometryModes,
+    estimatedRuntimeConnectionCount: metadata.bodsEstimatedRuntimeConnectionCount ?? 0,
+    warnings: Array.isArray(metadata.timetableWarnings) ? metadata.timetableWarnings.slice(0, 20) : [],
+    methodNoteIncludesDiagnostics: /Selected BODS query specs|Parsed \d/.test(methodNote) && /Reachability:/i.test(methodNote),
+    methodNote,
+  };
+}
+
+function getBodsLeedsRealityFailures(diagnostics) {
+  const failures = [];
+  const selectedSpecs = Array.isArray(diagnostics.bodsSelectedQuerySpecs)
+    ? diagnostics.bodsSelectedQuerySpecs
+    : [diagnostics.bodsSelectedQuerySpecs].filter(Boolean);
+  const triedSpecs = Array.isArray(diagnostics.bodsQuerySpecsTried) ? diagnostics.bodsQuerySpecsTried : [];
+  const hasWestYorkshireTried = triedSpecs.some((spec) => spec?.kind === "adminArea" && String(spec.value) === "450");
+  const hasWestYorkshireSelected = selectedSpecs.some((spec) => spec?.kind === "adminArea" && String(spec.value) === "450");
+  const reachable15 = Number(diagnostics.reachableStopsByBand?.[15]) || 0;
+  const reachable30 = Number(diagnostics.reachableStopsByBand?.[30]) || 0;
+  const reachable45 = Number(diagnostics.reachableStopsByBand?.[45]) || 0;
+  const reachable60 = Number(diagnostics.reachableStopsByBand?.[60]) || 0;
+  const max60 = Number(diagnostics.maximumDistanceReachedByBand?.[60]) || 0;
+
+  if (diagnostics.busMethodUsed !== BUS_METHOD_BODS) failures.push("BODS mode was not used.");
+  if (diagnostics.osmCorridorUsed) failures.push("OSM corridor mode was used.");
+  if (!hasWestYorkshireTried) failures.push("No numeric West Yorkshire / Leeds-relevant BODS adminArea query spec was tried.");
+  if (!hasWestYorkshireSelected) failures.push("No numeric West Yorkshire / Leeds-relevant BODS adminArea query spec was selected.");
+  if (Number(diagnostics.datasetCount) <= 0 || Number(diagnostics.stopCount) <= 0 || Number(diagnostics.connectionCount) <= 0) failures.push("A local timetable graph was not built.");
+  if (Number(diagnostics.initialStopsWithinWalkLimit) <= 0) failures.push("No real local initial boarding stops were found within the selected walk limit.");
+  if (Number(diagnostics.consideredConnectionCount) <= 0) failures.push("No scheduled connections were considered after the selected departure time.");
+  if (!(reachable60 > reachable15 || reachable45 > reachable15 || reachable30 > reachable15)) failures.push("Reachable stop count does not materially increase across the bands.");
+  if (reachable60 < 25) failures.push(`60-minute reachable stop count is tiny (${reachable60}); expected at least 25 unless BODS proves otherwise.`);
+  if (max60 < 3000) failures.push(`60-minute geometry remains within ${Math.round(max60)} m of the origin; expected a materially wider Leeds catchment.`);
+  if (diagnostics.meaningfulRadialDirectionCount < 2) failures.push("60-minute geometry has fewer than two meaningful radial directions from Leeds.");
+  if (diagnostics.disconnectedGeometryComponents > 4) failures.push(`Output has ${diagnostics.disconnectedGeometryComponents} disconnected geometry components; expected an origin-connected catchment.`);
+  if (!diagnostics.methodNoteIncludesDiagnostics) failures.push("Method note does not record the required BODS metrics.");
+  return failures;
+}
+
+function buildIsochroneGeometryBoundsByBand(isochrones, originCoordinates) {
+  const output = {};
+  (isochrones || []).forEach((isochrone) => {
+    const coordinates = collectGeometryCoordinates(isochrone.geometry).map(([longitude, latitude]) => ({ latitude, longitude }));
+    if (coordinates.length === 0) {
+      return;
+    }
+    const bounds = coordinates.reduce((current, coordinate) => ({
+      minLatitude: Math.min(current.minLatitude, coordinate.latitude),
+      maxLatitude: Math.max(current.maxLatitude, coordinate.latitude),
+      minLongitude: Math.min(current.minLongitude, coordinate.longitude),
+      maxLongitude: Math.max(current.maxLongitude, coordinate.longitude),
+      maximumDistanceMetres: Math.max(
+        current.maximumDistanceMetres,
+        isValidCoordinateObject(originCoordinates)
+          ? getDistanceMetres(originCoordinates.latitude, originCoordinates.longitude, coordinate.latitude, coordinate.longitude)
+          : 0
+      ),
+    }), {
+      minLatitude: coordinates[0].latitude,
+      maxLatitude: coordinates[0].latitude,
+      minLongitude: coordinates[0].longitude,
+      maxLongitude: coordinates[0].longitude,
+      maximumDistanceMetres: 0,
+    });
+    output[Number(isochrone.contour ?? isochrone.properties?.contour)] = {
+      ...bounds,
+      widthMetres: getDistanceMetres(originCoordinates.latitude, bounds.minLongitude, originCoordinates.latitude, bounds.maxLongitude),
+      heightMetres: getDistanceMetres(bounds.minLatitude, originCoordinates.longitude, bounds.maxLatitude, originCoordinates.longitude),
+      componentCount: countGeometryComponents(isochrone.geometry),
+    };
+  });
+  return output;
+}
+
+function countGeometryComponents(geometry) {
+  if (!geometry?.coordinates) {
+    return 0;
+  }
+  if (geometry.type === "MultiPolygon") {
+    return geometry.coordinates.length;
+  }
+  if (geometry.type === "Polygon") {
+    return 1;
+  }
+  return 0;
+}
+
+function countMeaningfulRadialDirections(isochrones, originCoordinates) {
+  if (!isValidCoordinateObject(originCoordinates)) {
+    return { count: 0, directions: [] };
+  }
+  const sectors = new Set();
+  (isochrones || [])
+    .filter((isochrone) => Number(isochrone.contour ?? isochrone.properties?.contour) === 60)
+    .flatMap((isochrone) => collectGeometryCoordinates(isochrone.geometry))
+    .forEach(([longitude, latitude]) => {
+      const distance = getDistanceMetres(originCoordinates.latitude, originCoordinates.longitude, latitude, longitude);
+      if (!Number.isFinite(distance) || distance < 2500) {
+        return;
+      }
+      const bearing = getBearingDegrees(originCoordinates, { latitude, longitude });
+      sectors.add(Math.floor(bearing / 45));
+    });
+  return {
+    count: sectors.size,
+    directions: Array.from(sectors).sort((a, b) => a - b).map((sector) => `${sector * 45}-${sector * 45 + 45} degrees`),
+  };
+}
+
+function getBearingDegrees(from, to) {
+  const phi1 = from.latitude * Math.PI / 180;
+  const phi2 = to.latitude * Math.PI / 180;
+  const deltaLambda = (to.longitude - from.longitude) * Math.PI / 180;
+  const y = Math.sin(deltaLambda) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+function getNextWeekdayDateString(startDate = new Date()) {
+  const date = new Date(startDate);
+  while (date.getDay() === 0 || date.getDay() === 6) {
+    date.setDate(date.getDate() + 1);
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+window.runBodsLeedsRealityTest = runBodsLeedsRealityTest;
+if (typeof window.addEventListener === "function") {
+  window.addEventListener("bods-leeds-reality-test", async () => {
+  const root = document.documentElement;
+  root.removeAttribute("data-bods-leeds-reality-result");
+  root.removeAttribute("data-bods-leeds-reality-error");
+  try {
+    const options = JSON.parse(root.getAttribute("data-bods-leeds-reality-options") || "{}");
+    const result = await runBodsLeedsRealityTest(options);
+    root.setAttribute("data-bods-leeds-reality-result", JSON.stringify(result));
+  } catch (error) {
+    root.setAttribute("data-bods-leeds-reality-error", error?.message || String(error));
+  }
+  });
+}
+createBodsLeedsRealityTestHarness();
+
+function createBodsLeedsRealityTestHarness() {
+  if (!window.location?.search?.includes("codexReality") || !document.body) {
+    return;
+  }
+  const button = document.createElement("button");
+  button.id = "bodsLeedsRealityTestButton";
+  button.type = "button";
+  button.textContent = "Run BODS reality test";
+  button.style.cssText = "position:fixed;left:8px;bottom:8px;z-index:9999;font:12px sans-serif;";
+  const output = document.createElement("pre");
+  output.id = "bodsLeedsRealityTestOutput";
+  output.style.cssText = "position:fixed;left:8px;bottom:36px;z-index:9999;max-width:480px;max-height:220px;overflow:auto;background:#fff;color:#111;border:1px solid #999;padding:6px;font:11px monospace;white-space:pre-wrap;";
+  output.textContent = "idle";
+  button.addEventListener("click", async () => {
+    output.textContent = "running";
+    try {
+      const result = await runBodsLeedsRealityTest({
+        departureDate: "2026-06-23",
+        departureTime: "09:30",
+        maximumWalkToBusStopMetres: 400,
+      });
+      output.textContent = JSON.stringify(result);
+    } catch (error) {
+      output.textContent = JSON.stringify({ ok: false, failures: [error?.message || String(error)] });
+    }
+  });
+  document.body.append(output, button);
 }
 
 function buildBodsTransferEdges(stops) {
