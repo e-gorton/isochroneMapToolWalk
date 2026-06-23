@@ -494,7 +494,7 @@ const MODE_CONFIG = {
   },
   bus: {
     label: "Bus",
-    extent: "Indicative bus route corridor catchment",
+    extent: "BODS timetable-based bus catchment",
     scaleLabel: "2 km",
     zoom: 13,
     amenityRadius: 8000,
@@ -3377,6 +3377,7 @@ async function refreshLiveContext(statusText) {
     }
 
     state.isochrones = liveIsochrones;
+    state.currentMapView = null;
     state.lastIsochroneFallbackNotice = liveIsochrones.fallbackNotice || "";
     state.lastIsochroneSourceNote = liveIsochrones.sourceNote || "";
     setStatus(
@@ -3557,7 +3558,7 @@ async function handleAmenityRefresh(
       setStatus(
         "Draft ready",
         state.selectedMode === "bus"
-        ? "Indicative bus route corridor catchments generated. Live amenity context refreshed where available."
+      ? "BODS timetable-based bus catchments generated. Live amenity context refreshed where available."
           : state.selectedMode === "walking"
             ? "Live OpenStreetMap context and locally generated walking isochrones refreshed for the current coordinates."
             : "Live OpenStreetMap context and locally generated cycling isochrones refreshed for the current coordinates.",
@@ -12740,7 +12741,8 @@ function projectLatLonToSvg(latitude, longitude, mapView) {
 }
 
 function buildIsochroneLayerMarkup(isochrones, mapView) {
-  const layers = isochrones.map((isochrone, index) => {
+  const orderedIsochrones = [...isochrones].sort((a, b) => Number(b.contour ?? b.properties?.contour ?? 0) - Number(a.contour ?? a.properties?.contour ?? 0));
+  const layers = orderedIsochrones.map((isochrone, index) => {
     const pathMarkup = geometryToSvgPath(isochrone.geometry, mapView);
     if (!pathMarkup) {
       return { fill: "", stroke: "", pathMarkup: "", color: isochrone.color, clipPathId: `isochrone-band-${index}` };
