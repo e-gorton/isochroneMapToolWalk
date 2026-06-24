@@ -57,6 +57,101 @@ assert.match(
 );
 assert.match(
   appSource,
+  /bus_assumption:\s*currentBusAssumption/,
+  "The exported method note should use the generated BODS bus assumption text rather than a stale manual note field."
+);
+assert.match(
+  appSource,
+  /state\.lastIsochroneSourceNote && !\(wantsBodsNote && state\.lastIsochroneSourceNote\.includes\(OSM_BUS_ROUTE_METHOD_NOTE\)\)/,
+  "BODS-only mode should refuse to reuse an old OSM corridor source note from cached state."
+);
+assert.match(
+  appSource,
+  /if \(wantsBodsNote\) {\s*return buildBodsTimetableSourceNote\(metadata\);/s,
+  "BODS-only mode should not fall back to the old OSM corridor source note when no suitable BODS source note is cached."
+);
+assert.match(
+  appSource,
+  /BODS timetable catchments could not be generated from a usable local scheduled graph for the selected origin, date and time\./,
+  "BODS failures should produce a clear timetable-stage diagnostic note instead of corridor wording."
+);
+assert.match(
+  appSource,
+  /Boarding-stop audit:/,
+  "BODS source notes should include boarding-stop diagnostics so next failures can be diagnosed from the method note."
+);
+assert.match(
+  appSource,
+  /const BODS_OSM_EXACT_STOP_ID_CHUNK_SIZE = 30;/,
+  "Exact OSM stop-id enrichment should use smaller chunks so Leeds-area BODS stop matching is less likely to time out."
+);
+assert.match(
+  appSource,
+  /const BODS_MAX_EXACT_OSM_STOP_ID_CHUNKS = 8;/,
+  "Exact OSM stop-id enrichment should allow more smaller chunks to improve local stop-coordinate recovery."
+);
+assert.match(
+  appSource,
+  /const BODS_STOP_ENRICHMENT_OVERPASS_TIMEOUT_MS = 20000;/,
+  "BODS stop-coordinate enrichment should tolerate slower Overpass responses before giving up on local stop matching."
+);
+assert.match(
+  appSource,
+  /const BODS_MAX_NAPTAN_API_LOOKUPS = 40;/,
+  "BODS stop-coordinate enrichment should fall back to a capped number of NaPTAN API lookups when local OSM enrichment is insufficient."
+);
+assert.match(
+  appSource,
+  /const NAPTAN_ACCESS_NODES_ENDPOINT = IS_FILE_CONTEXT[\s\S]+?\/api\/proxy\/naptan\/access-nodes/,
+  "Bus mode should use the NaPTAN access-nodes feed through the worker proxy for authoritative stop lookup."
+);
+assert.match(
+  appSource,
+  /const BODS_NAPTAN_ACCESS_NODES_CACHE = new Map\(\);/,
+  "NaPTAN access-nodes exports should be cached between runs."
+);
+assert.match(
+  appSource,
+  /const BODS_MAX_XML_FILES_PER_DATASET = 120;/,
+  "BODS parsing should cap XML files per dataset so one oversized archive does not dominate the whole run."
+);
+assert.match(
+  appSource,
+  /const BODS_PROGRESSIVE_MIN_LOCAL_DATASETS_FOR_EARLY_EXIT = 2;/,
+  "BODS discovery should be able to stop early once a clearly usable local graph has been built."
+);
+assert.match(
+  appSource,
+  /const BODS_DATASET_TEXT_CACHE = new Map\(\);/,
+  "BODS dataset text downloads should be cached between runs."
+);
+assert.match(
+  appSource,
+  /const BODS_TIMETABLE_MODEL_CACHE = new Map\(\);/,
+  "Parsed BODS timetable models should be cached between runs."
+);
+assert.match(
+  appSource,
+  /async function publishBodsProgress\(/,
+  "BODS parsing should expose a shared progress helper for clearer live status updates."
+);
+assert.match(
+  appSource,
+  /function shouldStopProgressiveBodsDatasetSearch\(/,
+  "BODS dataset discovery should have an explicit early-exit heuristic once a usable local graph exists."
+);
+assert.match(
+  appSource,
+  /function cloneBodsTimetableModelResult\(/,
+  "Cached BODS timetable models should be cloned safely before reuse."
+);
+assert.match(
+  appSource,
+  /function buildBodsDatasetLocalityDiagnostics\(/,
+  "BODS dataset acceptance should expose explicit locality diagnostics instead of relying only on nearest-stop distance."
+);
+assert.match(
+  appSource,
   /estimateBusWalkTimeMinutes\(distance\)/,
   "BODS timetable initial walk calculations should use the shared straight-line walk helper."
 );
@@ -254,6 +349,8 @@ vm.runInContext(
   globalThis.__enrichBodsMissingStopCoordinates = enrichBodsMissingStopCoordinates;
   globalThis.__BODS_STOP_COORDINATE_CACHE = BODS_STOP_COORDINATE_CACHE;
   globalThis.__extractCoordinateFromNaptanPayload = extractCoordinateFromNaptanPayload;
+  globalThis.__parseNaptanAccessNodesCsv = parseNaptanAccessNodesCsv;
+  globalThis.__deriveNaptanAreaCodeCandidatesFromStopId = deriveNaptanAreaCodeCandidatesFromStopId;
   globalThis.__getNearestBodsStopDistanceMetres = getNearestBodsStopDistanceMetres;
   globalThis.__getNearestRealBodsStopDistanceMetres = getNearestRealBodsStopDistanceMetres;
   globalThis.__countBodsRealLocalStopsNearOrigin = countBodsRealLocalStopsNearOrigin;
@@ -604,6 +701,17 @@ const naptanPayloadCoordinate = sandbox.__extractCoordinateFromNaptanPayload({
 });
 assert.ok(naptanPayloadCoordinate.latitude > 53 && naptanPayloadCoordinate.longitude < -1, "NaPTAN enrichment payloads with BNG coordinates should convert to WGS84.");
 
+const naptanCsvStops = sandbox.__parseNaptanAccessNodesCsv(`ATCOCode,NaptanCode,CommonName,Street,LocalityName,Easting,Northing,Longitude,Latitude,AdministrativeAreaCode,Status\n450010001,45010001,Helston Road,Bodmin Road,Middleton,428982,428479,-1.561961704797171,53.751877786685149,107,active\n450010002,45010002,Inactive Stop,Bodmin Road,Middleton,429117,428112,-1.559948921435931,53.748571783894725,107,inactive\n`);
+assert.equal(naptanCsvStops.length, 1, "NaPTAN access-nodes parsing should keep active stops and ignore inactive records.");
+assert.equal(naptanCsvStops[0].atcoCode, "450010001", "NaPTAN access-nodes parsing should preserve ATCO codes as the primary stop identifier.");
+assert.equal(naptanCsvStops[0].source, "naptan_access_nodes_csv", "NaPTAN access-nodes parsing should mark the authoritative NaPTAN stop source.");
+
+assert.deepEqual(
+  Array.from(sandbox.__deriveNaptanAreaCodeCandidatesFromStopId("450010001")),
+  ["450", "4500"],
+  "NaPTAN stop-id lookup should derive area-code candidates from the ATCO stop prefix."
+);
+
 const convertedLeedsCoordinate = sandbox.__convertBritishNationalGridToWgs84(429700, 433800);
 assert.ok(convertedLeedsCoordinate.latitude > 53 && convertedLeedsCoordinate.latitude < 54, "BNG easting/northing should convert to a plausible Leeds latitude.");
 assert.ok(convertedLeedsCoordinate.longitude > -2 && convertedLeedsCoordinate.longitude < -1, "BNG easting/northing should convert to a plausible Leeds longitude.");
@@ -801,7 +909,7 @@ assert.match(appSource, /bodsLocalDatasetCount/, "BODS diagnostics should record
 assert.match(appSource, /bodsNearestRealParsedStopDistanceMetres/, "BODS diagnostics should record nearest real parsed stop proximity.");
 assert.match(appSource, /reachableStopsByBand/, "BODS diagnostics should record reachable stop counts by band.");
 assert.match(appSource, /reachableConnectionsByBand/, "BODS diagnostics should record reachable connection counts by band.");
-assert.match(appSource, /BODS_CACHE_SCHEMA_VERSION = "v74-leeds-reality-graph"/, "BODS cache keys should be schema-busted for the Leeds reality-test graph model.");
+assert.match(appSource, /BODS_CACHE_SCHEMA_VERSION = "v75-bods-progress-cache"/, "BODS cache keys should be schema-busted when the BODS parsing/caching path changes.");
 assert.match(appSource, /BODS_MAX_XML_FILES = 320/, "BODS graph parsing should not cap Leeds coverage at the earlier small local extract.");
 assert.match(appSource, /BODS_MAX_CONNECTIONS = 240000/, "BODS graph parsing should retain enough scheduled links for a Leeds 60-minute catchment.");
 assert.match(appSource, /BODS_MAX_STOPS = 45000/, "BODS graph parsing should retain enough local stops for a Leeds 60-minute catchment.");
@@ -832,4 +940,49 @@ assert.equal(
 assert.ok(
   sandbox.__getNearestRealBodsStopDistanceMetres(realLocalStops, { latitude: 53.8, longitude: -1.55 }) < 5,
   "BODS diagnostics should retain the nearest real parsed stop distance near the origin."
+);
+
+const matchedBoardingStopOnlyTimetable = {
+  stops: [
+    { id: "450000100", atcoCode: "450000100", name: "Local boarding stop", latitude: 53.8012, longitude: -1.5481, coordinateSource: "nearby_origin_stop_code_match" },
+    { id: "REMOTE2", name: "Next stop", latitude: 53.812, longitude: -1.59, coordinateSource: "route_link_geometry" },
+  ],
+  stopsById: new Map(),
+  connections: [
+    {
+      fromStopId: "450000100",
+      toStopId: "REMOTE2",
+      departureMinutes: 9 * 60 + 20,
+      arrivalMinutes: 9 * 60 + 32,
+      routeRef: "50",
+      tripId: "dataset-locality-test",
+      geometry: [
+        { latitude: 53.8012, longitude: -1.5481 },
+        { latitude: 53.812, longitude: -1.59 },
+      ],
+    },
+  ],
+};
+assert.equal(
+  sandbox.__isBodsTimetableModelLocalToOrigin(
+    matchedBoardingStopOnlyTimetable,
+    defaultLeedsAccessOrigin,
+    400,
+    {
+      originCoordinates: defaultLeedsAccessOrigin,
+      maximumWalkToBusStopMetres: 400,
+      departureMinutes: 9 * 60 + 11,
+      nearbyOriginStops: [
+        {
+          atcoCode: "450000100",
+          name: "Local boarding stop",
+          latitude: 53.8012,
+          longitude: -1.5481,
+          distanceMetres: 40,
+        },
+      ],
+    }
+  ),
+  true,
+  "A BODS dataset with no non-injected local stop coordinates should still count as local when it serves a matched local boarding stop with usable post-departure scheduled links."
 );
