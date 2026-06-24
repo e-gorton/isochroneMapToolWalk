@@ -811,7 +811,8 @@ assert.match(appSource, /function shouldUseBodsDatasetFreeTextSearchTerm/, "BODS
 assert.match(appSource, /nearby-origin-stop-atco/, "BODS search terms should include nearby OSM/NaPTAN ATCO stop codes before wider authority terms.");
 assert.match(appSource, /BODS_AUTHORITY_ADMIN_AREA_CODE_RULES/, "BODS discovery should prioritise reliable numeric adminArea codes from known authority context.");
 assert.match(appSource, /countBodsRealLocalStopsNearOrigin/, "BODS local dataset acceptance should require real local stops, not only injected origin-stop matches.");
-assert.match(appSource, /window\.runBodsLeedsRealityTest = runBodsLeedsRealityTest;/, "A browser-console Leeds BODS reality test should be exposed for developer diagnostics.");
+assert.match(appSource, /window\.runBodsRealityTest = runBodsRealityTest;/, "A browser-console BODS reality test should be exposed for developer diagnostics.");
+assert.match(appSource, /window\.runBodsLeedsRealityTest = runBodsRealityTest;/, "The legacy Leeds-specific debug alias should still point to the new BODS reality test.");
 assert.match(appSource, /reachable60 < 25/, "The Leeds reality test should fail loudly when the 60-minute reachable stop count is tiny.");
 assert.match(appSource, /max60 < 3000/, "The Leeds reality test should fail loudly when 60-minute geometry remains a city-centre blob.");
 assert.match(appSource, /meaningfulRadialDirectionCount < 2/, "The Leeds reality test should require at least two meaningful radial directions.");
