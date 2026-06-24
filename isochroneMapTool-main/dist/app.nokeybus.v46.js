@@ -240,9 +240,9 @@ const BODS_REAL_LOCAL_STOP_RADIUS_METRES = 2500;
 const BODS_MIN_REAL_LOCAL_STOPS_FOR_ACCEPTANCE = 2;
 const BODS_STOP_ENRICHMENT_RADIUS_METRES = 18000;
 const BODS_STOP_ENRICHMENT_MAX_IDS = 500;
-const BODS_OSM_EXACT_STOP_ID_CHUNK_SIZE = 80;
-const BODS_MAX_EXACT_OSM_STOP_ID_CHUNKS = 3;
-const BODS_STOP_ENRICHMENT_OVERPASS_TIMEOUT_MS = 12000;
+const BODS_OSM_EXACT_STOP_ID_CHUNK_SIZE = 30;
+const BODS_MAX_EXACT_OSM_STOP_ID_CHUNKS = 8;
+const BODS_STOP_ENRICHMENT_OVERPASS_TIMEOUT_MS = 20000;
 const BODS_MAX_NAPTAN_API_LOOKUPS = 0;
 const BODS_LOCAL_DATASET_MAX_DISTANCE_METRES = 1000;
 const BODS_MAX_IMPLAUSIBLE_SPEED_KPH = 130;
@@ -1258,9 +1258,10 @@ function renderMap() {
         compareAmenitiesForLegend(a, b, state.selectedMode)
       );
   const configuredBands = getConfiguredBandsForMode(state.selectedMode);
+  const currentBusMetadata = state.isochrones?.metadata || {};
   elements.previewNote.textContent =
     state.selectedMode === "bus"
-      ? `${elements.busNote.value} ${getBusContourSourceNote()}`
+      ? `${buildBusMethodLimitationText(currentBusMetadata)} ${getBusContourSourceNote(currentBusMetadata)}`
       : state.selectedMode === "cycling"
         ? "Cycling mode shows settlements and key destinations from OpenStreetMap. Cycling isochrones are generated from a local OpenStreetMap-derived network with user-authored links and barrier edits applied before polygon generation."
         : "Basemap and amenities are drawn from OpenStreetMap live services. Walking isochrones are generated from a local OpenStreetMap-derived network with dedicated pedestrian links, tagged sidewalks and user-authored links/barriers considered before polygon generation.";
@@ -1461,6 +1462,13 @@ function animateMapViewTo(targetView, durationMs = 350) {
 function renderMethodNote() {
   const config = MODE_CONFIG[state.selectedMode];
   const scenario = state.generatedScenario;
+  const currentBusMetadata = state.isochrones?.metadata || {};
+  const currentBusAssumption = state.selectedMode === "bus"
+    ? buildBusMethodLimitationText(currentBusMetadata)
+    : undefined;
+  const currentBusSourceNote = state.selectedMode === "bus"
+    ? getBusContourSourceNote(currentBusMetadata)
+    : undefined;
   const visibleCount = state.amenities.filter((item) => item.visible).length;
   const legendCount = state.amenities.filter((item) => item.visible && item.showInLegend).length;
   const generatedDate = new Date().toLocaleString("en-GB", {
@@ -1483,7 +1491,7 @@ function renderMethodNote() {
       status: "Prototype front-end only",
       map_preview:
         state.selectedMode === "bus"
-          ? `OpenStreetMap raster tiles with live OpenStreetMap amenity points. ${getBusContourSourceNote()}`
+          ? `OpenStreetMap raster tiles with live OpenStreetMap amenity points. ${currentBusSourceNote}`
           : state.selectedMode === "walking"
             ? "OpenStreetMap raster tiles with live Overpass amenity points and a locally generated OpenStreetMap walking network catchment with user-authored network edits applied before polygon generation"
             : "OpenStreetMap raster tiles with live Overpass amenity points and a locally generated OpenStreetMap cycling network catchment with user-authored network edits applied before polygon generation",
@@ -1493,15 +1501,15 @@ function renderMethodNote() {
           : `${visibleCount} visible amenities, ${legendCount} shown in legend, fetched from OpenStreetMap around the current site`,
       cycling_time_assumption:
         state.selectedMode === "cycling" ? CYCLING_TIME_GUIDANCE_TEXT : undefined,
-      bus_assumption: elements.busNote.value,
+      bus_assumption: currentBusAssumption,
       public_transport_method:
-        state.selectedMode === "bus" ? getBusContourSourceNote() : undefined,
+        currentBusSourceNote,
       public_transport_assessment_date:
         state.selectedMode === "bus" ? getSelectedBusDate() : undefined,
       public_transport_departure_time:
         state.selectedMode === "bus" ? getSelectedBusTime() : undefined,
       public_transport_source:
-        state.selectedMode === "bus" ? getBusContourSourceNote() : undefined,
+        currentBusSourceNote,
       public_transport_diagnostics:
         state.selectedMode === "bus" ? buildBusIsochroneDiagnosticsForMethodNote(state.isochrones?.metadata) : undefined,
       manual_map_edits: {
@@ -1521,7 +1529,7 @@ function renderMethodNote() {
       },
       limitations: [
         state.selectedMode === "bus"
-          ? buildBusMethodLimitationText()
+          ? buildBusMethodLimitationText(currentBusMetadata)
           : "Walking and cycling isochrones depend on OpenStreetMap network completeness and tagging quality, including the presence or absence of dedicated pedestrian links, sidewalk tags, access restrictions and cycle permissions.",
         "Amenities are fetched live from OpenStreetMap via Overpass and therefore depend on current public service availability.",
         MANUAL_EDIT_LIMITATION_TEXT,
@@ -8748,16 +8756,29 @@ function buildBusIsochroneDiagnosticsForMethodNote(metadata = {}) {
   }
   return {
     provider: metadata.provider,
+    intended_provider: metadata.intendedProvider,
+    fallback_reason: metadata.fallbackReason || null,
+    bods_diagnostic_stage: metadata.bodsDiagnosticStage || metadata.bodsDiagnostics?.stage || null,
     bods_selected_query_specs: metadata.bodsSelectedQuerySpecs || metadata.bodsSelectedQuerySpec || null,
+    bods_selected_dataset_summaries: metadata.bodsSelectedDatasetSummaries || [],
+    bods_rejected_dataset_samples: metadata.bodsRejectedDatasetSamples || [],
     bods_dataset_count: metadata.bodsDatasetCount ?? metadata.datasetCount,
     bods_local_dataset_count: metadata.bodsLocalDatasetCount,
     parsed_file_count: metadata.parsedXmlFileCount,
     stop_count: metadata.stopCount,
     connection_count: metadata.connectionCount,
+    valid_post_departure_connection_count: metadata.validPostDepartureConnectionCount,
+    nearby_physical_stop_count: metadata.nearbyPhysicalStopCount,
+    eligible_boarding_stop_count: metadata.eligiblePhysicalBoardingStopCount,
+    bods_matched_boarding_stop_count: metadata.bodsMatchedBoardingStopCount,
+    boarding_stops_with_departures_after_selected_time: metadata.boardingStopsWithDeparturesAfterSelectedTime,
+    initial_boarding_stop_count: metadata.initialStopCount,
     reachable_stop_count: metadata.reachableStopCount,
     reachable_connection_count: metadata.reachableConnectionCount,
     reachable_stops_by_band: metadata.reachableStopsByBand,
     reachable_connections_by_band: metadata.reachableConnectionsByBand,
+    reachable_stops_by_initial_boarding_stop: metadata.reachableStopsByInitialBoardingStop,
+    top_routes_by_initial_boarding_stop: metadata.topRoutesByInitialBoardingStop,
     reachable_route_summary: metadata.bodsReachableRouteSummary,
     target_place_diagnostics: metadata.bodsTargetPlaceDiagnostics,
     output_geometry_modes: metadata.bodsOutputGeometryModes,
@@ -9870,6 +9891,8 @@ function summariseBodsOutputGeometryModes(isochrones = []) {
 }
 
 function buildBodsTimetableSourceNote(metadata = {}) {
+  const failureReason = metadata.fallbackReason || metadata.failureReason || metadata.userMessage || "";
+  const failureStage = metadata.bodsDiagnosticStage || metadata.bodsDiagnostics?.stage || "";
   const dateText = metadata.departureDate ? ` Departure date: ${metadata.departureDate}.` : "";
   const timeText = metadata.departureTime ? ` Departure time: ${metadata.departureTime}.` : "";
   const datasetText = Number.isFinite(Number(metadata.datasetCount)) ? ` Parsed ${metadata.datasetCount} BODS dataset${Number(metadata.datasetCount) === 1 ? "" : "s"} / ${metadata.parsedXmlFileCount || 0} TransXChange file${Number(metadata.parsedXmlFileCount || 0) === 1 ? "" : "s"}.` : "";
@@ -9881,6 +9904,9 @@ function buildBodsTimetableSourceNote(metadata = {}) {
     : "";
   const localDatasetText = Number.isFinite(Number(metadata.bodsLocalDatasetCount))
     ? ` Local usable BODS datasets merged: ${Number(metadata.bodsLocalDatasetCount).toLocaleString("en-GB")}${Number.isFinite(Number(metadata.bodsRealLocalStopCount)) ? `; real local parsed stop references near the origin: ${Number(metadata.bodsRealLocalStopCount).toLocaleString("en-GB")}` : ""}.`
+    : "";
+  const boardingStopText = Number.isFinite(Number(metadata.nearbyPhysicalStopCount)) || Number.isFinite(Number(metadata.eligiblePhysicalBoardingStopCount)) || Number.isFinite(Number(metadata.bodsMatchedBoardingStopCount))
+    ? ` Boarding-stop audit: ${Number(metadata.nearbyPhysicalStopCount || 0).toLocaleString("en-GB")} nearby physical stop${Number(metadata.nearbyPhysicalStopCount || 0) === 1 ? "" : "s"} found; ${Number(metadata.eligiblePhysicalBoardingStopCount || 0).toLocaleString("en-GB")} within the selected walk limit; ${Number(metadata.bodsMatchedBoardingStopCount || 0).toLocaleString("en-GB")} matched to parsed BODS stops; ${Number(metadata.boardingStopsWithDeparturesAfterSelectedTime || 0).toLocaleString("en-GB")} with scheduled departures after the selected time.`
     : "";
   const stopText = Number.isFinite(Number(metadata.stopCount)) ? ` Timetable graph: ${Number(metadata.stopCount).toLocaleString("en-GB")} stops and ${Number(metadata.connectionCount || 0).toLocaleString("en-GB")} scheduled stop-to-stop connections.` : "";
   const reachabilityText = Number.isFinite(Number(metadata.reachableStopCount)) || Number.isFinite(Number(metadata.reachableConnectionCount))
@@ -9909,7 +9935,13 @@ function buildBodsTimetableSourceNote(metadata = {}) {
     : "";
   const walkText = Number.isFinite(Number(metadata.maximumWalkToBusStopMetres)) ? ` Initial boarding stops are limited to ${Math.round(metadata.maximumWalkToBusStopMetres).toLocaleString("en-GB")} m estimated walking access from the selected origin; transfer walks are limited to ${Math.round(metadata.transferWalkRadiusMetres || BODS_TRANSFER_RADIUS_METRES).toLocaleString("en-GB")} m.` : "";
   const warningText = metadata.timetableWarnings?.length ? ` Warnings: ${metadata.timetableWarnings.slice(0, 3).join(" | ")}.` : "";
-  return `Bus catchments are timetable-based outputs generated from Bus Open Data Service timetable datasets where TransXChange stop times can be parsed in-browser. Initial and transfer walking times use straight-line distance multiplied by a 1.3 detour factor and an assumed walking speed of 4.8 kph / 80 m per minute. Scheduled waiting time and bus in-vehicle running time use BODS scheduled stop times where parsed successfully. The outputs do not include live disruption, reliability, crowding, cancellations, fare integration or fare data.${dateText}${timeText}${walkText}${selectedQuerySpecText}${localDatasetText}${datasetText}${stopText}${reachabilityText}${coordinateText}${speedText}${geometryText}${routeAuditText}${targetAuditText}${precisionWarningText}${warningText}`;
+  if ((metadata.provider || "").includes("unavailable") || failureReason || failureStage) {
+    const failureHeading = "BODS timetable catchments could not be generated from a usable local scheduled graph for the selected origin, date and time.";
+    const failureReasonText = failureReason ? ` Reason: ${failureReason}.` : "";
+    const failureStageText = failureStage ? ` Failure stage: ${failureStage}.` : "";
+    return `${failureHeading}${failureReasonText}${failureStageText}${dateText}${timeText}${walkText}${selectedQuerySpecText}${localDatasetText}${datasetText}${boardingStopText}${stopText}${reachabilityText}${coordinateText}${speedText}${routeAuditText}${targetAuditText}${warningText}`;
+  }
+  return `Bus catchments are timetable-based outputs generated from Bus Open Data Service timetable datasets where TransXChange stop times can be parsed in-browser. Initial and transfer walking times use straight-line distance multiplied by a 1.3 detour factor and an assumed walking speed of 4.8 kph / 80 m per minute. Scheduled waiting time and bus in-vehicle running time use BODS scheduled stop times where parsed successfully. The outputs do not include live disruption, reliability, crowding, cancellations, fare integration or fare data.${dateText}${timeText}${walkText}${selectedQuerySpecText}${localDatasetText}${datasetText}${boardingStopText}${stopText}${reachabilityText}${coordinateText}${speedText}${geometryText}${routeAuditText}${targetAuditText}${precisionWarningText}${warningText}`;
 }
 
 function formatBodsQuerySpecForMethodNote(querySpec = {}) {
@@ -12032,9 +12064,15 @@ function capPolygonRings(rings, maxRings) {
   return rings.filter((_, index) => index % interval === 0).slice(0, maxRings);
 }
 
-function getBusContourSourceNote() {
-  if (state.lastIsochroneSourceNote) {
+function getBusContourSourceNote(metadata = {}) {
+  const wantsBodsNote = (metadata.provider || "").includes("BODS")
+    || (metadata.intendedProvider || "").includes("BODS")
+    || getSelectedBusMethod() === BUS_METHOD_BODS;
+  if (state.lastIsochroneSourceNote && !(wantsBodsNote && state.lastIsochroneSourceNote.includes(OSM_BUS_ROUTE_METHOD_NOTE))) {
     return state.lastIsochroneSourceNote;
+  }
+  if (wantsBodsNote) {
+    return buildBodsTimetableSourceNote(metadata);
   }
   return buildOsmBusRouteSourceNote();
 }
