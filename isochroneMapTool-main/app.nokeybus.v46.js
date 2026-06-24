@@ -6267,18 +6267,28 @@ function shouldUseBodsDatasetFreeTextSearchTerm(term) {
     return false;
   }
 
-  // OSM route hints are useful for diagnostics, but BODS free-text dataset search is global.
-  // A local OSM route relation with destination "London" or route ref "905" can therefore load
-  // Hertfordshire/London datasets and pass through via injected origin-stop matches. Use numeric
-  // adminArea and explicit local/target terms instead.
+  // Keep BODS dataset discovery location-led and conservative. Free-text dataset search is global,
+  // so broad place, route and project-name terms can still pull in geographically wrong datasets
+  // even after strict local validation. Use numeric NaPTAN/BODS admin-area queries first, then
+  // allow only a narrow fallback set tied to planning-authority and nearby stop locality context.
   if (/^nearby-origin-route-(ref|destination|origin|via)$/i.test(source)) {
     return false;
   }
   if (/^nearby-origin-stop-route-ref$/i.test(source)) {
     return false;
   }
+  if (/^(target-place-corridor|target-place-corridor-pair)$/i.test(source)) {
+    return false;
+  }
+  if (/^(settlement-amenity|project-name-tail)$/i.test(source)) {
+    return false;
+  }
+  if (/^nearby-origin-stop-(name|street|ref|local-ref|operator)$/i.test(source)) {
+    return false;
+  }
 
-  return true;
+  return /^(mapit-authority|planning-authority-field|nearby-origin-stop-locality|nearby-origin-stop-(atco|naptan))$/i.test(source)
+    || /^transport-area-alias:/i.test(source);
 }
 
 function isBodsSyntheticOriginMatchedStop(stop = {}) {
@@ -6417,18 +6427,7 @@ function buildBodsDatasetQuerySpecs(searchTerms) {
     addAdminAreaSpec(entry.value, entry.source, false);
   });
 
-  // Try target corridor searches immediately after numeric admin-area queries. This is what
-  // forces Leeds-Horsforth / Leeds-Headingley style services to be queried before broad stop-name
-  // and generic fallback searches exhaust the in-browser preview caps.
   searchTerms
-    .filter((term) => /^target-place-corridor/.test(String(term.source || "")))
-    .forEach((term) => {
-      addSearchSpec(term.value, term.source, true);
-      addSearchSpec(term.value, term.source, false);
-    });
-
-  searchTerms
-    .filter((term) => !/^target-place-corridor/.test(String(term.source || "")))
     .filter(shouldUseBodsDatasetFreeTextSearchTerm)
     .forEach((term) => {
       addSearchSpec(term.value, term.source, true);
