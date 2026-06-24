@@ -88,6 +88,10 @@ async function handleProxyRequest(request, url, env, ctx) {
     return proxyBodsDownloadRequest(request, url, env, ctx);
   }
 
+  if (url.pathname === "/api/proxy/naptan/access-nodes") {
+    return proxyNaptanAccessNodesRequest(request, url);
+  }
+
   if (url.pathname.startsWith("/api/proxy/mapit/")) {
     const targetPath = url.pathname.replace("/api/proxy/mapit/", "");
     return proxyGenericRequest(
@@ -290,6 +294,24 @@ async function proxyBodsDownloadRequest(request, url, env, ctx) {
   return new Response(response.body, { status: response.status, headers });
 }
 
+async function proxyNaptanAccessNodesRequest(request, url) {
+  const targetUrl = new URL("https://naptan.api.dft.gov.uk/v1/access-nodes");
+  const atcoAreaCodes = url.searchParams.get("atcoAreaCodes");
+  const dataFormat = url.searchParams.get("dataFormat") || "csv";
+  if (atcoAreaCodes) {
+    targetUrl.searchParams.set("atcoAreaCodes", atcoAreaCodes);
+  }
+  targetUrl.searchParams.set("dataFormat", dataFormat);
+  return proxyGenericRequest(request, targetUrl.toString(), {
+    timeoutMs: 45000,
+    headers: {
+      "Accept": dataFormat.toLowerCase() === "csv" ? "text/csv, text/plain;q=0.9, */*;q=0.1" : "application/xml, text/xml;q=0.9, */*;q=0.1",
+      "User-Agent": "Prime-Isochrone-Tool/1.0 NaPTAN access-nodes client",
+    },
+    cacheControl: "public, max-age=86400",
+  });
+}
+
 function getBodsApiKey(env) {
   return env?.BODS_API_KEY || "";
 }
@@ -355,8 +377,8 @@ async function proxyGenericRequest(request, targetUrl, options = {}) {
       init.body = await request.text();
     }
 
-    const response = await fetch(targetUrl, init);
-    return copyProxyResponse(response);
+    const response = await fetchWithTimeout(targetUrl, init, options.timeoutMs || 30000);
+    return copyProxyResponse(response, options.cacheControl ? { "Cache-Control": options.cacheControl } : {});
   } catch (error) {
     return jsonResponse(
       {
